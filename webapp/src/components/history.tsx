@@ -60,9 +60,7 @@ export function History() {
   const linkQueryRender = (text: string, record: HistoryDetail) => {
     const externalUrl = backendData?.find(b => b.proxyTo === record.backendUrl)?.externalUrl ?? record.backendUrl;
     return (
-      <Text link={{ href: `${externalUrl}/ui/query.html?${text}`, target: '_blank' }} underline>
-        {text}
-      </Text>
+      <Text link={{ href: `${externalUrl}/ui/query.html?${text}`, target: '_blank' }} underline>{text}</Text>
     );
   }
 
