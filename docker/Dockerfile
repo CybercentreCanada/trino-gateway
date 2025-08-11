@@ -12,7 +12,7 @@
 # limitations under the License.
 
 # syntax=docker/dockerfile:1
-FROM eclipse-temurin:23-jdk AS build
+FROM eclipse-temurin:24-jdk AS build
 WORKDIR /build
 COPY . .
 RUN ./mvnw clean package -DskipTests
