@@ -18,7 +18,7 @@ COPY . .
 RUN ./mvnw clean package -DskipTests
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal AS jdk-setup
-ARG JDK_VERSION=23
+ARG JDK_VERSION=24
 ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_VERSION}"
 
 RUN \
@@ -30,7 +30,7 @@ RUN \
     curl -#LfS "https://api.adoptium.net/v3/binary/latest/${JDK_VERSION}/ga/linux/x64/jdk/hotspot/normal/eclipse" | tar -zx --strip 1 -C "${JAVA_HOME}"
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal
-ARG JDK_VERSION=23
+ARG JDK_VERSION=24
 ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_VERSION}"
 ENV PATH=$PATH:$JAVA_HOME/bin
 COPY --from=jdk-setup $JAVA_HOME $JAVA_HOME
@@ -38,7 +38,7 @@ COPY --from=jdk-setup $JAVA_HOME $JAVA_HOME
 RUN \
     set -xeu && \
     microdnf update -y && \
-    microdnf install -y tar less shadow-utils && \
+    microdnf install -y tar less shadow-utils gettext && \
     groupadd trino --gid 1000 && \
     useradd trino --uid 1000 --gid 1000 --create-home && \
     mkdir -p /usr/lib/trino-gateway /etc/trino-gateway && \
