@@ -15,19 +15,21 @@ package io.trino.gateway.ha.config;
 
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.Duration;
-import io.trino.gateway.ha.clustermonitor.ActiveClusterMonitor;
 
 import java.util.Map;
 
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class MonitorConfiguration
 {
-    private int taskDelaySeconds = ActiveClusterMonitor.MONITOR_TASK_DELAY_SECONDS;
+    private Duration taskDelay = new Duration(1, MINUTES);
 
     private int retries;
 
     private Duration queryTimeout = new Duration(10, SECONDS);
+
+    private Duration clusterMetricsRegistryRefreshPeriod = new Duration(30, SECONDS);
 
     private boolean explicitPrepare;
 
@@ -44,14 +46,14 @@ public class MonitorConfiguration
 
     public MonitorConfiguration() {}
 
-    public int getTaskDelaySeconds()
+    public Duration getTaskDelay()
     {
-        return this.taskDelaySeconds;
+        return this.taskDelay;
     }
 
-    public void setTaskDelaySeconds(int taskDelaySeconds)
+    public void setTaskDelay(Duration taskDelay)
     {
-        this.taskDelaySeconds = taskDelaySeconds;
+        this.taskDelay = taskDelay;
     }
 
     public int getRetries()
@@ -132,5 +134,15 @@ public class MonitorConfiguration
     public void setMetricMaximumValues(Map<String, Float> metricMaximumValues)
     {
         this.metricMaximumValues = metricMaximumValues;
+    }
+
+    public Duration getClusterMetricsRegistryRefreshPeriod()
+    {
+        return clusterMetricsRegistryRefreshPeriod;
+    }
+
+    public void setClusterMetricsRegistryRefreshPeriod(Duration clusterMetricsRegistryRefreshPeriod)
+    {
+        this.clusterMetricsRegistryRefreshPeriod = clusterMetricsRegistryRefreshPeriod;
     }
 }

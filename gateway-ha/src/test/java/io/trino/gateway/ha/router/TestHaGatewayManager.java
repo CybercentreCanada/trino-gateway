@@ -14,6 +14,7 @@
 package io.trino.gateway.ha.router;
 
 import io.trino.gateway.ha.config.ProxyBackendConfiguration;
+import io.trino.gateway.ha.config.RoutingConfiguration;
 import io.trino.gateway.ha.persistence.JdbcConnectionManager;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,8 @@ final class TestHaGatewayManager
     void setUp()
     {
         JdbcConnectionManager connectionManager = createTestingJdbcConnectionManager();
-        haGatewayManager = new HaGatewayManager(connectionManager.getJdbi());
+        RoutingConfiguration routingConfiguration = new RoutingConfiguration();
+        haGatewayManager = new HaGatewayManager(connectionManager.getJdbi(), routingConfiguration);
     }
 
     @Test
@@ -43,7 +45,7 @@ final class TestHaGatewayManager
         backend.setRoutingGroup("adhoc");
         backend.setName("adhoc1");
         backend.setProxyTo("adhoc1.trino.gateway.io");
-        backend.setExternalUrl("adhoc1.trino.gateway.io");
+        backend.setExternalUrl("adhoc1.external.trino.gateway.io");
         ProxyBackendConfiguration updated = haGatewayManager.addBackend(backend);
         assertThat(updated).isEqualTo(backend);
 
@@ -51,7 +53,9 @@ final class TestHaGatewayManager
         assertThat(haGatewayManager.getAllBackends()).hasSize(1);
         assertThat(haGatewayManager.getActiveBackends("adhoc")).hasSize(1);
         assertThat(haGatewayManager.getActiveBackends("unknown")).isEmpty();
-        assertThat(haGatewayManager.getActiveAdhocBackends()).hasSize(1);
+        assertThat(haGatewayManager.getActiveDefaultBackends()).hasSize(1);
+
+        assertThat(haGatewayManager.getActiveDefaultBackends().getFirst().getExternalUrl()).isEqualTo("adhoc1.external.trino.gateway.io");
 
         // Update a backend
         ProxyBackendConfiguration adhoc = new ProxyBackendConfiguration();
@@ -82,6 +86,16 @@ final class TestHaGatewayManager
         assertThat(haGatewayManager.getAllBackends())
                 .extracting(ProxyBackendConfiguration::getRoutingGroup)
                 .containsExactly("adhoc");
+
+        // Test default externalUrl to proxyUrl
+        ProxyBackendConfiguration adhoc2 = new ProxyBackendConfiguration();
+        adhoc2.setActive(true);
+        adhoc2.setRoutingGroup("adhoc2");
+        adhoc2.setName("adhoc2");
+        adhoc2.setProxyTo("adhoc2.trino.gateway.io");
+        haGatewayManager.addBackend(adhoc2);
+        ProxyBackendConfiguration backendConfigurationAdhoc2 = haGatewayManager.getActiveBackends("adhoc2").getFirst();
+        assertThat(backendConfigurationAdhoc2.getExternalUrl()).isEqualTo(adhoc2.getExternalUrl());
     }
 
     @Test

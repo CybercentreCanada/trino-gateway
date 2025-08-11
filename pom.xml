@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.airlift</groupId>
         <artifactId>airbase</artifactId>
-        <version>262</version>
+        <version>277</version>
     </parent>
 
     <groupId>io.trino.gateway</groupId>
@@ -39,10 +39,11 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <project.build.targetJdk>23</project.build.targetJdk>
-        <air.java.version>23</air.java.version>
+        <project.build.targetJdk>24</project.build.targetJdk>
+        <air.java.version>24.0.2</air.java.version>
         <air.check.skip-spotbugs>true</air.check.skip-spotbugs>
         <air.check.skip-pmd>true</air.check.skip-pmd>
+        <air.modernizer.java-version>8</air.modernizer.java-version>
         <air.release.preparation-goals>clean verify -DskipTests</air.release.preparation-goals>
     </properties>
 
@@ -51,7 +52,7 @@
             <dependency>
                 <groupId>io.airlift</groupId>
                 <artifactId>bom</artifactId>
-                <version>335</version>
+                <version>339</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -105,6 +106,7 @@
                             -Xep:InvalidThrows:ERROR \
                             -Xep:JavaTimeDefaultTimeZone:ERROR \
                             -Xep:MissingOverride:ERROR \
+                            -Xep:StatementSwitchToExpressionSwitch:ERROR \
                             -Xep:StringCaseLocaleUsage:ERROR \
                             -Xep:TraditionalSwitchExpression:ERROR \
                             -Xep:TypeParameterUnusedInFormals:ERROR \
@@ -133,6 +135,13 @@
                                 <bannedImport>org.junit.jupiter.api.Assertions.*</bannedImport>
                             </bannedImports>
                         </RestrictImports>
+                        <requirePropertyDiverges>
+                            <property>project.description</property>
+                        </requirePropertyDiverges>
+                        <requireProperty>
+                            <property>project.name</property>
+                            <message>Project name must be set in the pom.xml</message>
+                        </requireProperty>
                     </rules>
                 </configuration>
             </plugin>

@@ -21,7 +21,7 @@ Consider the following requirements for your Trino Gateway installation.
 
 ### Java
 
-Trino Gateway requires a Java 23 runtime. Older versions of Java can not be
+Trino Gateway requires a Java 24 runtime. Older versions of Java can not be
 used. Newer versions might work but are not tested.
 
 Verify the Java version on your system with `java -version`.
@@ -200,6 +200,25 @@ additionalStatementPaths:
   - '/v2/statement'
 ```
 
+### Deactivate UI pages
+
+You can set the `disablePages` configuration to deactivate UI pages.
+
+```yaml
+uiConfiguration:
+  disablePages:
+    - 'routing-rules'
+```
+
+The following pages are available:
+
+- `dashboard`
+- `cluster`
+- `resource-group`
+- `selector`
+- `history`
+- `routing-rules`
+
 ## Configure behind a load balancer
 
 A possible deployment of Trino Gateway is to run multiple instances of Trino 
@@ -286,7 +305,7 @@ the key. Finally, you can deploy Trino Gateway with the chart from the root
 of this repository:
 
 ```shell
-helm install tg --values values-override.yaml helm/trino-gateway 
+helm install tg --values values-override.yaml trino/trino-gateway 
 ```
 
 Secrets for `authenticationSecret` and `backendState` can be provisioned
@@ -361,6 +380,23 @@ that are marked as active.
 
 See [TrinoStatus](routing-rules.md#trinostatus) for more details on 
 what each Trino status means.
+
+Username and password for the health check can be configured by adding 
+`backendState` to your configuration. The username and password must be valid
+across all backends.
+
+SSL and xForwardProtoHeader can be configured based on whether the 
+connection between the Trino Gateway and the backend is secure. 
+By default, both are set to false.
+Find more information in [the related Trino documentation](https://trino.io/docs/current/security/tls.html#use-a-load-balancer-to-terminate-tls-https).
+
+```yaml
+backendState:
+  username: "user"
+  password: "password"
+  ssl: <false/true>
+  xForwardedProtoHeader: <false/true>  
+```
 
 The type of health check is configured by setting
 
@@ -442,15 +478,7 @@ monitor:
 This uses a JDBC connection to query `system.runtime` tables for cluster 
 information. It is required for the query count based routing strategy. This is
 recommended over `UI_API` since it does not restrict the Web UI authentication
-method of backend clusters. Configure a username and password by adding
-`backendState` to your configuration. The username and password must be valid 
-across all backends.
-
-```yaml
-backendState:
-  username: "user"
-  password: "password"
-```
+method of backend clusters. 
 
 Trino Gateway uses `explicitPrepare=false` by default. This property was introduced
 in Trino 431, and uses a single query for prepared statements, instead of a 

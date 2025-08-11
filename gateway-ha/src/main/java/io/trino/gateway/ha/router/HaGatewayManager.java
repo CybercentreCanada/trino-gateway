@@ -16,6 +16,7 @@ package io.trino.gateway.ha.router;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
 import io.trino.gateway.ha.config.ProxyBackendConfiguration;
+import io.trino.gateway.ha.config.RoutingConfiguration;
 import io.trino.gateway.ha.persistence.dao.GatewayBackend;
 import io.trino.gateway.ha.persistence.dao.GatewayBackendDao;
 import org.jdbi.v3.core.Jdbi;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
 public class HaGatewayManager
@@ -32,10 +34,12 @@ public class HaGatewayManager
     private static final Logger log = Logger.get(HaGatewayManager.class);
 
     private final GatewayBackendDao dao;
+    private final String defaultRoutingGroup;
 
-    public HaGatewayManager(Jdbi jdbi)
+    public HaGatewayManager(Jdbi jdbi, RoutingConfiguration routingConfiguration)
     {
         dao = requireNonNull(jdbi, "jdbi is null").onDemand(GatewayBackendDao.class);
+        this.defaultRoutingGroup = routingConfiguration.getDefaultRoutingGroup();
     }
 
     @Override
@@ -53,14 +57,13 @@ public class HaGatewayManager
     }
 
     @Override
-    public List<ProxyBackendConfiguration> getActiveAdhocBackends()
+    public List<ProxyBackendConfiguration> getActiveDefaultBackends()
     {
         try {
-            List<GatewayBackend> proxyBackendList = dao.findActiveAdhocBackend();
-            return upcast(proxyBackendList);
+            return getActiveBackends(defaultRoutingGroup);
         }
         catch (Exception e) {
-            log.info("Error fetching all backends: %s", e.getLocalizedMessage());
+            log.info("Error fetching backends for default routing group: %s", e.getLocalizedMessage());
         }
         return ImmutableList.of();
     }
@@ -82,13 +85,30 @@ public class HaGatewayManager
     @Override
     public void deactivateBackend(String backendName)
     {
-        dao.deactivate(backendName);
+        updateClusterActivationStatus(backendName, false, () -> dao.deactivate(backendName));
     }
 
     @Override
     public void activateBackend(String backendName)
     {
-        dao.activate(backendName);
+        updateClusterActivationStatus(backendName, true, () -> dao.activate(backendName));
+    }
+
+    private void updateClusterActivationStatus(String clusterName, boolean newStatus, Runnable changeActiveStatus)
+    {
+        GatewayBackend model = dao.findFirstByName(clusterName);
+        checkState(model != null, "No cluster found with name: %s, could not (de)activate", clusterName);
+
+        boolean previousStatus = model.active();
+        changeActiveStatus.run();
+        logActivationStatusChange(clusterName, newStatus, previousStatus);
+    }
+
+    private static void logActivationStatusChange(String clusterName, boolean newStatus, boolean previousStatus)
+    {
+        if (previousStatus != newStatus) {
+            log.info("Backend cluster %s activation status set to active=%s (previous status: active=%s).", clusterName, newStatus, previousStatus);
+        }
     }
 
     @Override
@@ -111,6 +131,7 @@ public class HaGatewayManager
         }
         else {
             dao.update(backend.getName(), backend.getRoutingGroup(), backendProxyTo, backendExternalUrl, backend.isActive());
+            logActivationStatusChange(backend.getName(), backend.isActive(), model.active());
         }
         return backend;
     }

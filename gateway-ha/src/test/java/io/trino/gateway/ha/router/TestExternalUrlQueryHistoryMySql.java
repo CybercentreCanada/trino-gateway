@@ -11,24 +11,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.trino.gateway.ha.module;
+package io.trino.gateway.ha.router;
 
-import com.google.inject.Scopes;
-import io.trino.gateway.ha.config.HaGatewayConfiguration;
-import io.trino.gateway.ha.router.RoutingManager;
-import io.trino.gateway.ha.router.StochasticRoutingManager;
+import org.testcontainers.containers.MySQLContainer;
 
-public class StochasticRoutingManagerProvider
-            extends RouterBaseModule
+public class TestExternalUrlQueryHistoryMySql
+        extends BaseExternalUrlQueryHistoryTest
 {
-    public StochasticRoutingManagerProvider(HaGatewayConfiguration configuration)
+    public TestExternalUrlQueryHistoryMySql()
     {
-        super(configuration);
-    }
-
-    @Override
-    public void configure()
-    {
-        bind(RoutingManager.class).to(StochasticRoutingManager.class).in(Scopes.SINGLETON);
+        super(new MySQLContainer<>("mysql:8.0.36"));
     }
 }

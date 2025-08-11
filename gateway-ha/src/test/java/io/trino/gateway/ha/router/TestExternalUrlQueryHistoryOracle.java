@@ -11,8 +11,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.trino.gateway.ha.handler.schema;
+package io.trino.gateway.ha.router;
 
-import java.net.URI;
+import static io.trino.gateway.ha.HaGatewayTestUtils.getOracleContainer;
 
-public record RoutingDestination(String routingGroup, String clusterHost, URI clusterUri, String externalUrl) {}
+public class TestExternalUrlQueryHistoryOracle
+        extends BaseExternalUrlQueryHistoryTest
+{
+    public TestExternalUrlQueryHistoryOracle()
+    {
+        super(getOracleContainer());
+    }
+}

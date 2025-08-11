@@ -19,12 +19,12 @@ import com.google.inject.Module;
 import com.google.inject.Scopes;
 import io.airlift.log.Logger;
 import io.trino.gateway.ha.clustermonitor.ActiveClusterMonitor;
+import io.trino.gateway.ha.clustermonitor.ClusterMetricsStatsExporter;
 import io.trino.gateway.ha.clustermonitor.ForMonitor;
 import io.trino.gateway.ha.config.HaGatewayConfiguration;
+import io.trino.gateway.ha.config.RoutingConfiguration;
 import io.trino.gateway.ha.handler.ProxyHandlerStats;
 import io.trino.gateway.ha.handler.RoutingTargetHandler;
-import io.trino.gateway.ha.module.RouterBaseModule;
-import io.trino.gateway.ha.module.StochasticRoutingManagerProvider;
 import io.trino.gateway.ha.resource.EntityEditorResource;
 import io.trino.gateway.ha.resource.GatewayHealthCheckResource;
 import io.trino.gateway.ha.resource.GatewayResource;
@@ -35,7 +35,9 @@ import io.trino.gateway.ha.resource.LoginResource;
 import io.trino.gateway.ha.resource.PublicResource;
 import io.trino.gateway.ha.resource.TrinoResource;
 import io.trino.gateway.ha.router.ForRouter;
+import io.trino.gateway.ha.router.RoutingManager;
 import io.trino.gateway.ha.router.RoutingRulesManager;
+import io.trino.gateway.ha.router.StochasticRoutingManager;
 import io.trino.gateway.ha.security.AuthorizedExceptionMapper;
 import io.trino.gateway.proxyserver.ForProxy;
 import io.trino.gateway.proxyserver.ProxyRequestHandler;
@@ -46,9 +48,8 @@ import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
-import static com.google.common.collect.MoreCollectors.toOptional;
+import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.http.client.HttpClientBinder.httpClientBinder;
 import static io.airlift.jaxrs.JaxrsBinder.jaxrsBinder;
 import static java.lang.String.format;
@@ -90,18 +91,6 @@ public class BaseApp
         return null;
     }
 
-    private static void addDefaultRouterProviderModules(List<Module> modules, HaGatewayConfiguration configuration)
-    {
-        Optional<Module> routerProvider = modules.stream()
-                .filter(module -> module instanceof RouterBaseModule)
-                .collect(toOptional());
-        if (routerProvider.isEmpty()) {
-            logger.warn("Router provider doesn't exist in the config, using the StochasticRoutingManagerProvider");
-            String clazz = StochasticRoutingManagerProvider.class.getCanonicalName();
-            modules.add(newModule(clazz, configuration));
-        }
-    }
-
     public static List<Module> addModules(HaGatewayConfiguration configuration)
     {
         List<Module> modules = new ArrayList<>();
@@ -114,8 +103,6 @@ public class BaseApp
                 modules.add(newModule(clazz, configuration));
             }
         }
-        addDefaultRouterProviderModules(modules, configuration);
-
         return modules;
     }
 
@@ -136,6 +123,7 @@ public class BaseApp
     public void configure(Binder binder)
     {
         binder.bind(HaGatewayConfiguration.class).toInstance(configuration);
+        binder.bind(RoutingConfiguration.class).toInstance(configuration.getRouting());
         binder.bind(ActiveClusterMonitor.class).in(Scopes.SINGLETON);
         registerAuthFilters(binder);
         registerResources(binder);
@@ -146,6 +134,11 @@ public class BaseApp
         binder.bind(ProxyHandlerStats.class).in(Scopes.SINGLETON);
         newExporter(binder).export(ProxyHandlerStats.class).withGeneratedName();
         binder.bind(RoutingRulesManager.class);
+        binder.bind(ClusterMetricsStatsExporter.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, RoutingManager.class)
+                .setDefault()
+                .to(StochasticRoutingManager.class)
+                .in(Scopes.SINGLETON);
     }
 
     private static void addManagedApps(HaGatewayConfiguration configuration, Binder binder)
