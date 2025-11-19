@@ -11,6 +11,17 @@ variables:
   containerRegistry: uchimera
   DOCKER_BUILDKIT: 1
   MAVEN: './mvnw -B'
+  m2RepoNodePath: /datadisks/disk1/.m2/repository
+  m2RepoContainerPath: /tmp/m2/repository
+  jdkReleaseName: 24.0.2+12
+
+container:
+  image: uchimera.azurecr.io/cccs/dev/trino-build:478_trino-478-merge-fixes
+  options: --entrypoint="" --user=0 -e M2_STRATUS_TOKEN
+  endpoint: uchimera
+  volumes:
+    - "${{ variables.m2RepoNodePath }}:${{ variables.m2RepoContainerPath }}"
+    - "/root/.m2/settings.xml:/root/.m2/settings.xml"
 
 pool: cybertron-build-pool
 
@@ -31,6 +42,34 @@ steps:
       echo "##vso[task.setvariable variable=trinoVersion]$VERSION"
     displayName: Extract Trino Gateway Version
 
+  - task: Maven@4
+    displayName: Build Trino Gateway JAR
+    inputs:
+      mavenPomFile: 'gateway-ha/pom.xml'
+      goals: 'clean package'
+      options: '-DskipTests'
+
+  - task: Bash@3
+    displayName: Prepare Docker build context
+    inputs:
+      targetType: 'inline'
+      script: |
+        set -eux
+
+        # Create Docker build context directory
+        WORK_DIR="$(Build.SourcesDirectory)/docker-build-context"
+        rm -rf "$WORK_DIR"
+        mkdir -p "$WORK_DIR/gateway-ha"
+
+        # Copy Maven-built JAR and rename, scripts and Dockerfile
+        cp gateway-ha/target/gateway-ha-*-jar-with-dependencies.jar "$WORK_DIR/gateway-ha/gateway-ha-jar-with-dependencies.jar"
+        cp -R docker/bin "$WORK_DIR/gateway-ha"
+        cp docker/Dockerfile "$WORK_DIR/"
+
+        # Output the contents for debugging
+        ls -l "$WORK_DIR/gateway-ha"
+        ls -l "$WORK_DIR"
+
   - task: Docker@2
     displayName: Build Docker image
     env:
@@ -40,11 +79,16 @@ steps:
     inputs:
       command: build
       repository: trinodb/trino-gateway
-      Dockerfile: docker/Dockerfile
+      Dockerfile: "$(Build.SourcesDirectory)/docker-build-context/Dockerfile"
       tags: |
         $(BRANCH_NAME)
         $(BRANCH_NAME)_$(buildTimestamp)_b$(Build.BuildId)
-      buildContext: .
+      buildContext: "$(Build.SourcesDirectory)/docker-build-context"
+      arguments: >
+        --build-arg TRINO_GATEWAY_BASE_IMAGE=registry.access.redhat.com/ubi10/ubi-micro:latest
+        --build-arg TRINO_GATEWAY_BUILD_IMAGE=registry.access.redhat.com/ubi10/ubi:latest
+        --build-arg JDK_RELEASE_NAME=$(jdkReleaseName)
+        --build-arg JDK_DOWNLOAD_LINK=https://api.adoptium.net/v3/binary/version/jdk-$(jdkReleaseName)/linux/x64/jdk/hotspot/normal/eclipse?project=jdk
 
   - task: Docker@2
     displayName: Push image
