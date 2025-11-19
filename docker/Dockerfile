@@ -37,6 +37,7 @@ RUN \
     chmod +x /tmp/overlay/usr/libexec/grepconf.sh && \
     dnf update -y && \
     dnf install --installroot /tmp/overlay --setopt install_weak_deps=false --nodocs -y \
+      gettext \
       less \
       zlib `#required by java` \
       curl-minimal grep `# required by health-check` \
