@@ -16,8 +16,8 @@ ARG TRINO_GATEWAY_BASE_IMAGE
 ARG TRINO_GATEWAY_BUILD_IMAGE
 
 FROM ${TRINO_GATEWAY_BUILD_IMAGE} AS jdk-download
-ARG JDK_RELEASE_NAME
 ARG JDK_DOWNLOAD_LINK
+ARG JDK_RELEASE_NAME
 ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_RELEASE_NAME}"
 
 RUN \
@@ -37,7 +37,6 @@ RUN \
     chmod +x /tmp/overlay/usr/libexec/grepconf.sh && \
     dnf update -y && \
     dnf install --installroot /tmp/overlay --setopt install_weak_deps=false --nodocs -y \
-      gettext \
       less \
       zlib `#required by java` \
       curl-minimal grep `# required by health-check` \
@@ -68,4 +67,4 @@ USER trino:trino
 CMD java -jar /usr/lib/trino-gateway/gateway-ha-jar-with-dependencies.jar "/etc/trino-gateway/config.yaml"
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s \
-    CMD /usr/lib/trino-gateway/bin/health-check
+  CMD /usr/lib/trino-gateway/bin/health-check
