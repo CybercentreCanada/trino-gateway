@@ -13,6 +13,7 @@
  */
 package io.trino.gateway.ha.handler;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.io.CharStreams;
 import io.airlift.log.Logger;
 import io.trino.gateway.ha.router.TrinoQueryProperties;
@@ -24,10 +25,12 @@ import java.io.InputStreamReader;
 import java.net.URI;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static io.trino.gateway.ha.handler.HttpUtils.TRINO_QUERY_PROPERTIES;
 import static io.trino.gateway.ha.handler.HttpUtils.TRINO_UI_PATH;
 import static io.trino.gateway.ha.handler.HttpUtils.V1_QUERY_PATH;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -39,7 +42,6 @@ public final class ProxyUtils
     public static final String AUTHORIZATION = "Authorization";
 
     private static final Logger log = Logger.get(ProxyUtils.class);
-    public static final int QUERY_TEXT_LENGTH_FOR_HISTORY = 200;
     /**
      * This regular expression matches query ids as they appear in the path of a URL. The query id must be preceded
      * by a "/". A query id is defined as three groups of digits separated by underscores, with a final group
@@ -53,6 +55,8 @@ public final class ProxyUtils
      * capitalization.
      */
     private static final Pattern QUERY_ID_PARAM_PATTERN = Pattern.compile(".*(?:%2F|(?i)query_?id(?-i)=|^)(\\d+_\\d+_\\d+_\\w+).*");
+    private static final Set<String> QUERY_STATE_PATH = ImmutableSet.of("queued", "scheduled", "executing");
+    private static final String PARTIAL_CANCEL_PATH = "partialCancel";
 
     private ProxyUtils() {}
 
@@ -75,7 +79,7 @@ public final class ProxyUtils
             throw new RuntimeException("Error reading request body", e);
         }
         if (!isNullOrEmpty(queryText) && queryText.toLowerCase(ENGLISH).contains("kill_query")) {
-            TrinoQueryProperties trinoQueryProperties = new TrinoQueryProperties(request, requestAnalyserClientsUseV2Format, requestAnalyserMaxBodySize);
+            TrinoQueryProperties trinoQueryProperties = (TrinoQueryProperties) request.getAttribute(TRINO_QUERY_PROPERTIES);
             return trinoQueryProperties.getQueryId();
         }
         return Optional.empty();
@@ -101,10 +105,10 @@ public final class ProxyUtils
             path = path.replace(matchingStatementPath.orElse(V1_QUERY_PATH), "");
             String[] tokens = path.split("/");
             if (tokens.length >= 2) {
-                if (tokens[1].equals("queued")
-                        || tokens[1].equals("scheduled")
-                        || tokens[1].equals("executing")
-                        || tokens[1].equals("partialCancel")) {
+                if (tokens.length >= 3 && QUERY_STATE_PATH.contains(tokens[1])) {
+                    if (tokens.length >= 4 && tokens[2].equals(PARTIAL_CANCEL_PATH)) {
+                        return Optional.of(tokens[3]);
+                    }
                     return Optional.of(tokens[2]);
                 }
                 return Optional.of(tokens[1]);

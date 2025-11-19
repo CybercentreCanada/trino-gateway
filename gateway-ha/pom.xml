@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.trino.gateway</groupId>
         <artifactId>trino-gateway-parent</artifactId>
-        <version>16-SNAPSHOT</version>
+        <version>17-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
 
@@ -60,11 +60,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.google.errorprone</groupId>
-            <artifactId>error_prone_annotations</artifactId>
         </dependency>
 
         <dependency>
@@ -319,7 +314,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.7</version>
+            <version>42.7.8</version>
             <scope>runtime</scope>
         </dependency>
 
