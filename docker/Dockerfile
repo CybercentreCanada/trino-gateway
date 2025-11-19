@@ -12,42 +12,56 @@
 # limitations under the License.
 
 # syntax=docker/dockerfile:1
-FROM eclipse-temurin:24-jdk AS build
-WORKDIR /build
-COPY . .
-RUN ./mvnw clean package -DskipTests
+ARG TRINO_GATEWAY_BASE_IMAGE
+ARG TRINO_GATEWAY_BUILD_IMAGE
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal AS jdk-setup
-ARG JDK_VERSION=24
-ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_VERSION}"
+FROM ${TRINO_GATEWAY_BUILD_IMAGE} AS jdk-download
+ARG JDK_RELEASE_NAME
+ARG JDK_DOWNLOAD_LINK
+ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_RELEASE_NAME}"
 
 RUN \
     set -xeuo pipefail && \
-    microdnf install -y tar gzip && \
+    dnf install -y tar gzip && \
     # Install JDK from the provided archive link \
-    echo "Downloading JDK" && \
+    echo "Downloading JDK from ${JDK_DOWNLOAD_LINK}" && \
     mkdir -p "${JAVA_HOME}" && \
-    curl -#LfS "https://api.adoptium.net/v3/binary/latest/${JDK_VERSION}/ga/linux/x64/jdk/hotspot/normal/eclipse" | tar -zx --strip 1 -C "${JAVA_HOME}"
+    curl -#LfS "${JDK_DOWNLOAD_LINK}" | tar -zx --strip 1 -C "${JAVA_HOME}"
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal
-ARG JDK_VERSION=24
-ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_VERSION}"
+FROM ${TRINO_GATEWAY_BUILD_IMAGE} AS packages
+
+RUN \
+    set -xeuo pipefail && \
+    mkdir -p /tmp/overlay/usr/libexec/ && \
+    touch /tmp/overlay/usr/libexec/grepconf.sh && \
+    chmod +x /tmp/overlay/usr/libexec/grepconf.sh && \
+    dnf update -y && \
+    dnf install --installroot /tmp/overlay --setopt install_weak_deps=false --nodocs -y \
+      gettext \
+      less \
+      zlib `#required by java` \
+      curl-minimal grep `# required by health-check` \
+      shadow-utils `# required by useradd` \
+      tar `# required to support kubectl cp` && \
+      rm -rf /tmp/overlay/var/cache/*
+
+FROM ${TRINO_GATEWAY_BASE_IMAGE}
+WORKDIR /usr/lib/trino-gateway
+
+ARG JDK_RELEASE_NAME
+ENV JAVA_HOME="/usr/lib/jvm/jdk-${JDK_RELEASE_NAME}"
 ENV PATH=$PATH:$JAVA_HOME/bin
-COPY --from=jdk-setup $JAVA_HOME $JAVA_HOME
+COPY --from=jdk-download $JAVA_HOME $JAVA_HOME
+COPY --from=packages /tmp/overlay /
 
 RUN \
     set -xeu && \
-    microdnf update -y && \
-    microdnf install -y tar less shadow-utils gettext && \
     groupadd trino --gid 1000 && \
     useradd trino --uid 1000 --gid 1000 --create-home && \
     mkdir -p /usr/lib/trino-gateway /etc/trino-gateway && \
     chown -R "trino:trino" /usr/lib/trino-gateway /etc/trino-gateway
 
-WORKDIR /usr/lib/trino-gateway
-
-COPY --from=build /build/gateway-ha/target/gateway-ha-*-jar-with-dependencies.jar ./gateway-ha-jar-with-dependencies.jar
-COPY --from=build /build/docker/bin ./bin
+COPY --chown=trino:trino gateway-ha /usr/lib/trino-gateway
 
 EXPOSE 8080
 USER trino:trino

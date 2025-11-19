@@ -11,23 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.trino.gateway.ha.clustermonitor;
+package io.trino.gateway.ha.security.util;
 
-import io.trino.gateway.ha.router.RoutingManager;
-
-public class HealthCheckObserver
-        implements TrinoClusterStatsObserver
+public final class GatewayFilterPriorities
 {
-    private final RoutingManager routingManager;
+    private GatewayFilterPriorities() {}
 
-    public HealthCheckObserver(RoutingManager routingManager)
-    {
-        this.routingManager = routingManager;
-    }
-
-    @Override
-    public void observe(java.util.List<ClusterStats> clustersStats)
-    {
-        routingManager.updateClusterStats(clustersStats);
-    }
+    public static final int PRE_AUTHENTICATION = 500;
+    public static final int PRE_AUTHORIZATION = 1500;
 }
