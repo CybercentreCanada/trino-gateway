@@ -25,6 +25,10 @@ public class RoutingConfiguration
 
     private String defaultRoutingGroup = "adhoc";
 
+    private boolean injectUserTokenExtraCredentialEnabled;
+
+    private String userTokenExtraCredentialKey = "rest.auth.oauth2.token-exchange.subject-token";
+
     public Duration getAsyncTimeout()
     {
         return asyncTimeout;
@@ -53,5 +57,25 @@ public class RoutingConfiguration
     public void setDefaultRoutingGroup(String defaultRoutingGroup)
     {
         this.defaultRoutingGroup = defaultRoutingGroup;
+    }
+
+    public boolean getInjectUserTokenExtraCredentialEnabled()
+    {
+        return injectUserTokenExtraCredentialEnabled;
+    }
+
+    public void setInjectUserTokenExtraCredentialEnabled(boolean injectUserTokenExtraCredentialEnabled)
+    {
+        this.injectUserTokenExtraCredentialEnabled = injectUserTokenExtraCredentialEnabled;
+    }
+
+    public String getUserTokenExtraCredentialKey()
+    {
+        return userTokenExtraCredentialKey;
+    }
+
+    public void setUserTokenExtraCredentialKey(String userTokenExtraCredentialKey)
+    {
+        this.userTokenExtraCredentialKey = userTokenExtraCredentialKey;
     }
 }

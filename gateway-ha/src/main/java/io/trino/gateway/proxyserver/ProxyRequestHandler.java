@@ -64,7 +64,9 @@ import static io.airlift.http.client.Request.Builder.preparePut;
 import static io.airlift.http.client.StaticBodyGenerator.createStaticBodyGenerator;
 import static io.airlift.jaxrs.AsyncResponseHandler.bindAsyncResponse;
 import static io.trino.gateway.ha.handler.HttpUtils.TRINO_REQUEST_USER;
+import static io.trino.gateway.ha.handler.ProxyUtils.EXTRA_CREDENTIAL_HEADER;
 import static io.trino.gateway.ha.handler.ProxyUtils.SOURCE_HEADER;
+import static io.trino.gateway.ha.handler.ProxyUtils.extractBearerToken;
 import static jakarta.ws.rs.core.MediaType.TEXT_PLAIN_TYPE;
 import static jakarta.ws.rs.core.Response.Status.BAD_GATEWAY;
 import static jakarta.ws.rs.core.Response.Status.OK;
@@ -89,6 +91,8 @@ public class ProxyRequestHandler
     private final List<String> statementPaths;
     private final boolean includeClusterInfoInResponse;
     private final ProxyResponseConfiguration proxyResponseConfiguration;
+    private final boolean injectUserTokenExtraCredentialEnabled;
+    private final String userTokenExtraCredentialKey;
 
     @Inject
     public ProxyRequestHandler(
@@ -106,6 +110,8 @@ public class ProxyRequestHandler
         statementPaths = haGatewayConfiguration.getStatementPaths();
         this.includeClusterInfoInResponse = haGatewayConfiguration.isIncludeClusterHostInResponse();
         proxyResponseConfiguration = haGatewayConfiguration.getProxyResponseConfiguration();
+        injectUserTokenExtraCredentialEnabled = haGatewayConfiguration.getRouting().getInjectUserTokenExtraCredentialEnabled();
+        userTokenExtraCredentialKey = haGatewayConfiguration.getRouting().getUserTokenExtraCredentialKey();
     }
 
     @PreDestroy
@@ -173,6 +179,11 @@ public class ProxyRequestHandler
                 }
             }
         }
+
+        if (injectUserTokenExtraCredentialEnabled) {
+            injectUserTokenExtraCredential(servletRequest, requestBuilder);
+        }
+
         requestBuilder.addHeader(VIA, format("%s TrinoGateway", servletRequest.getProtocol()));
         if (addXForwardedHeaders) {
             addXForwardedHeaders(servletRequest, requestBuilder);
@@ -318,5 +329,17 @@ public class ProxyRequestHandler
         if (serverName != null) {
             requestBuilder.addHeader(X_FORWARDED_HOST, serverName);
         }
+    }
+
+    private void injectUserTokenExtraCredential(HttpServletRequest servletRequest, Request.Builder requestBuilder)
+    {
+        Optional<String> bearer = extractBearerToken(servletRequest);
+        if (bearer.isEmpty()) {
+            log.debug("Bearer token missing");
+            return;
+        }
+
+        // Inject into extra credential header for token-exchange
+        requestBuilder.addHeader(EXTRA_CREDENTIAL_HEADER, userTokenExtraCredentialKey + "=" + bearer.get());
     }
 }

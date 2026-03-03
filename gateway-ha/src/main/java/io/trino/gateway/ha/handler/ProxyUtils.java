@@ -40,6 +40,7 @@ public final class ProxyUtils
 {
     public static final String SOURCE_HEADER = "X-Trino-Source";
     public static final String AUTHORIZATION = "Authorization";
+    public static final String EXTRA_CREDENTIAL_HEADER = "X-Trino-Extra-Credential";
 
     private static final Logger log = Logger.get(ProxyUtils.class);
     /**
@@ -121,6 +122,20 @@ public final class ProxyUtils
             }
         }
         return Optional.empty();
+    }
+
+    public static Optional<String> extractBearerToken(HttpServletRequest request)
+    {
+        String header = request.getHeader(AUTHORIZATION);
+        if (header == null) {
+            return Optional.empty();
+        }
+        int space = header.indexOf(' ');
+        if (space < 0 || !header.substring(0, space).equalsIgnoreCase("Bearer")) {
+            return Optional.empty();
+        }
+        String token = header.substring(space + 1).trim();
+        return token.isEmpty() ? Optional.empty() : Optional.of(token);
     }
 
     public static URI buildUriWithNewCluster(String backendHost, HttpServletRequest request)
