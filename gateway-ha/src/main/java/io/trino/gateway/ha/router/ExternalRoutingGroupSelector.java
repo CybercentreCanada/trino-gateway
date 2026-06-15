@@ -67,6 +67,7 @@ public class ExternalRoutingGroupSelector
     @VisibleForTesting
     ExternalRoutingGroupSelector(HttpClient httpClient, RulesExternalConfiguration rulesExternalConfiguration, RequestAnalyzerConfig requestAnalyzerConfig)
     {
+        log.debug("ExternalRoutingGroupSelector constructor.");
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
         this.excludeHeaders = ImmutableSet.<String>builder()
                 .add("Content-Length")
@@ -88,6 +89,8 @@ public class ExternalRoutingGroupSelector
     @Override
     public RoutingSelectorResponse findRoutingDestination(HttpServletRequest servletRequest)
     {
+        log.debug("External router invoked.");
+        log.debug("External router URL: %s", uri);
         try {
             RoutingGroupExternalBody requestBody = createRequestBody(servletRequest);
             JsonBodyGenerator<RoutingGroupExternalBody> requestBodyGenerator = jsonBodyGenerator(ROUTING_GROUP_EXTERNAL_BODY_JSON_CODEC, requestBody);
@@ -100,6 +103,7 @@ public class ExternalRoutingGroupSelector
 
             // Execute the request and get the response
             ExternalRouterResponse response = httpClient.execute(request, ROUTING_GROUP_EXTERNAL_RESPONSE_JSON_RESPONSE_HANDLER);
+            log.error("External router response: %s", response);
 
             // Check the response and return the routing group
             if (response == null) {

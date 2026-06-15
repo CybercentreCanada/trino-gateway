@@ -59,6 +59,7 @@ public class FileBasedRoutingGroupSelector
     @Override
     public RoutingSelectorResponse findRoutingDestination(HttpServletRequest request)
     {
+        log.debug("File router invoked.");
         Map<String, String> result = new HashMap<>();
         Map<String, Object> state = new HashMap<>();
 

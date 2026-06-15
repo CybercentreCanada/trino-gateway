@@ -19,6 +19,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.google.inject.Singleton;
 import io.airlift.http.client.HttpClient;
+import io.airlift.log.Logger;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsHttpMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsInfoApiMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsJdbcMonitor;
@@ -81,6 +82,7 @@ import static java.util.Objects.requireNonNull;
 public class HaGatewayProviderModule
         extends AbstractModule
 {
+    private static final Logger log = Logger.get(HaGatewayProviderModule.class);
     private final LbOAuthManager oauthManager;
     private final LbFormAuthManager formAuthManager;
     private final AuthorizationManager authorizationManager;
@@ -217,21 +219,28 @@ public class HaGatewayProviderModule
         RoutingRulesConfiguration routingRulesConfig = configuration.getRoutingRules();
         if (routingRulesConfig.isRulesEngineEnabled()) {
             try {
+                log.debug("Rules type: %s", routingRulesConfig.getRulesType());
                 return switch (routingRulesConfig.getRulesType()) {
-                    case FILE -> RoutingGroupSelector.byRoutingRulesEngine(
-                            routingRulesConfig.getRulesConfigPath(),
-                            routingRulesConfig.getRulesRefreshPeriod(),
-                            configuration.getRequestAnalyzerConfig());
+                    case FILE -> {
+                        log.debug("Using FILE-based routing rules");
+                        yield RoutingGroupSelector.byRoutingRulesEngine(
+                                routingRulesConfig.getRulesConfigPath(),
+                                routingRulesConfig.getRulesRefreshPeriod(),
+                                configuration.getRequestAnalyzerConfig());
+                    }
                     case EXTERNAL -> {
+                        log.debug("Using EXTERNAL-based routing rules");
                         RulesExternalConfiguration rulesExternalConfiguration = routingRulesConfig.getRulesExternalConfiguration();
                         yield RoutingGroupSelector.byRoutingExternal(httpClient, rulesExternalConfiguration, configuration.getRequestAnalyzerConfig());
                     }
                 };
             }
             catch (Exception e) {
+                log.error(e, "Failed to initialize routing selector → fallback header routing");
                 return RoutingGroupSelector.byRoutingGroupHeader();
             }
         }
+        log.error("Unknown routing rules type=%s, fallback header routing", routingRulesConfig.getRulesType());
         return RoutingGroupSelector.byRoutingGroupHeader();
     }
 

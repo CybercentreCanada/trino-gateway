@@ -58,6 +58,8 @@ public class RoutingTargetHandler
             RoutingGroupSelector routingGroupSelector,
             HaGatewayConfiguration haGatewayConfiguration)
     {
+        log.debug("ACTIVE SELECTOR CLASS: %s", routingGroupSelector.getClass().getName());
+        log.debug("SELECTOR INSTANCE: %s", routingGroupSelector);
         this.routingManager = requireNonNull(routingManager);
         this.routingGroupSelector = requireNonNull(routingGroupSelector);
         this.defaultRoutingGroup = haGatewayConfiguration.getRouting().getDefaultRoutingGroup();
@@ -88,6 +90,7 @@ public class RoutingTargetHandler
 
     private RoutingTargetResponse getRoutingTargetResponse(HttpServletRequest request)
     {
+        log.debug("Selector class: %s", routingGroupSelector.getClass().getName());
         RoutingSelectorResponse routingDestination = routingGroupSelector.findRoutingDestination(request);
         String user = request.getHeader(USER_HEADER);
 
@@ -95,6 +98,7 @@ public class RoutingTargetHandler
         String routingGroup = !isNullOrEmpty(routingDestination.routingGroup())
                 ? routingDestination.routingGroup()
                 : defaultRoutingGroup;
+        log.debug("routingDestination.routingGroup(): %s, defaultRoutingGroup: %s", routingDestination.routingGroup(), defaultRoutingGroup);
         ProxyBackendConfiguration backendConfiguration = routingManager.provideBackendConfiguration(routingGroup, user);
         String clusterHost = backendConfiguration.getProxyTo();
         String externalUrl = backendConfiguration.getExternalUrl();
