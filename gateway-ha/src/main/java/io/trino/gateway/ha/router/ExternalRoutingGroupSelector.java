@@ -125,7 +125,7 @@ public class ExternalRoutingGroupSelector
                 });
                 // Log the headers that will be applied
                 if (!filteredHeaders.isEmpty()) {
-                    log.info("External routing service modified headers to: %s", filteredHeaders);
+                    log.debug("External routing service modified headers to: %s", filteredHeaders);
                 }
             }
             return new RoutingSelectorResponse(response.routingGroup(), filteredHeaders);

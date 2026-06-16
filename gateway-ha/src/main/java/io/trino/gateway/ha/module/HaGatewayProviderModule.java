@@ -19,6 +19,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.google.inject.Singleton;
 import io.airlift.http.client.HttpClient;
+import io.airlift.log.Logger;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsHttpMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsInfoApiMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsJdbcMonitor;
@@ -81,6 +82,7 @@ import static java.util.Objects.requireNonNull;
 public class HaGatewayProviderModule
         extends AbstractModule
 {
+    private static final Logger log = Logger.get(HaGatewayProviderModule.class);
     private final LbOAuthManager oauthManager;
     private final LbFormAuthManager formAuthManager;
     private final AuthorizationManager authorizationManager;
@@ -229,6 +231,7 @@ public class HaGatewayProviderModule
                 };
             }
             catch (Exception e) {
+                log.error(e, "Failed to initialize routing selector");
                 return RoutingGroupSelector.byRoutingGroupHeader();
             }
         }
