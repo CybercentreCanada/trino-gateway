@@ -13,7 +13,7 @@ variables:
   MAVEN: './mvnw -B'
   m2RepoNodePath: /datadisks/disk1/.m2/repository
   m2RepoContainerPath: /tmp/m2/repository
-  jdkReleaseName: 24.0.2+12
+  jdkReleaseName: 25.0.1+8
 
 container:
   image: uchimera.azurecr.io/cccs/dev/trino-build:478_trino-478-merge-fixes

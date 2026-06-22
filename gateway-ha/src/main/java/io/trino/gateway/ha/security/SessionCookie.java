@@ -87,8 +87,7 @@ public final class SessionCookie
 
         List<Map.Entry<Integer, String>> chunks = cookies.entrySet().stream()
                 .filter(e -> e.getKey().startsWith(prefix))
-                .map(e ->
-                {
+                .map(e -> {
                     try {
                         int index = Integer.parseInt(e.getKey().substring(prefix.length()));
                         return Map.entry(index, e.getValue().getValue());

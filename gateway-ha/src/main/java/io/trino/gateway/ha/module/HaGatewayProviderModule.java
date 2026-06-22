@@ -19,11 +19,8 @@ import com.google.inject.Scopes;
 import com.google.inject.Singleton;
 import com.google.inject.multibindings.Multibinder;
 import io.airlift.http.client.HttpClient;
-<<<<<<< HEAD
 import io.airlift.log.Logger;
-=======
 import io.trino.gateway.ha.clustermonitor.ActiveClusterMonitor;
->>>>>>> tags/19
 import io.trino.gateway.ha.clustermonitor.ClusterStatsHttpMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsInfoApiMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsJdbcMonitor;
@@ -76,14 +73,7 @@ import static java.util.Objects.requireNonNull;
 public class HaGatewayProviderModule
         extends AbstractModule
 {
-<<<<<<< HEAD
     private static final Logger log = Logger.get(HaGatewayProviderModule.class);
-    private final LbOAuthManager oauthManager;
-    private final LbFormAuthManager formAuthManager;
-    private final AuthorizationManager authorizationManager;
-    private final ResourceSecurityDynamicFeature resourceSecurityDynamicFeature;
-=======
->>>>>>> tags/19
     private final HaGatewayConfiguration configuration;
 
     @Override
