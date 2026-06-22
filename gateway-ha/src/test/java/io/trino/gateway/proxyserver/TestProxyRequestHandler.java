@@ -28,7 +28,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.io.File;
 import java.net.URI;
@@ -61,6 +61,7 @@ final class TestProxyRequestHandler
     private static final String OK = "OK";
     private static final int NOT_FOUND = 404;
     private static final MediaType MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+    private static final String HEAD_ENDPOINT = "/v1/query";
 
     private final String customPutEndpoint = "/v1/custom"; // this is enabled in test-config-template.yml
     private final String healthCheckEndpoint = "/v1/info";
@@ -70,7 +71,8 @@ final class TestProxyRequestHandler
             throws Exception
     {
         prepareMockBackend(mockTrinoServer, customBackendPort, "default custom response");
-        mockTrinoServer.setDispatcher(new Dispatcher() {
+        mockTrinoServer.setDispatcher(new Dispatcher()
+        {
             @Override
             public MockResponse dispatch(RecordedRequest request)
             {
@@ -84,6 +86,11 @@ final class TestProxyRequestHandler
                     return new MockResponse().setResponseCode(200)
                             .setHeader(CONTENT_TYPE, JSON_UTF_8)
                             .setBody(OK);
+                }
+
+                if (request.getMethod().equals("HEAD") && request.getPath().equals(HEAD_ENDPOINT)) {
+                    return new MockResponse().setResponseCode(200)
+                            .setHeader(CONTENT_TYPE, JSON_UTF_8);
                 }
 
                 return new MockResponse().setResponseCode(NOT_FOUND);
@@ -127,22 +134,41 @@ final class TestProxyRequestHandler
     }
 
     @Test
+    void testHeadRequestHandler()
+            throws Exception
+    {
+        String url = "http://localhost:" + routerPort + HEAD_ENDPOINT;
+
+        Request headRequest = new Request.Builder().url(url).head().build();
+        try (Response response = httpClient.newCall(headRequest).execute()) {
+            assertThat(response.code()).isEqualTo(200);
+            assertThat(response.header("Content-Type")).isEqualTo("application/json;charset=utf-8");
+        }
+
+        Request getRequest = new Request.Builder().url(url).get().build();
+        try (Response response = httpClient.newCall(getRequest).execute()) {
+            assertThat(response.code()).isEqualTo(NOT_FOUND);
+        }
+    }
+
+    @Test
     void testGetQueryDetailsFromRequest()
     {
         // A sample query longer than 200 characters to test against truncation.
-        String longQuery = """
-        SELECT
-            c.customer_name,
-            c.customer_region,
-            COUNT(o.order_id) AS total_orders,
-            SUM(o.order_value) AS total_revenue
-        FROM
-            hive.sales_data.customers AS c
-        JOIN
-            hive.sales_data.orders AS o
-                ON c.customer_id = o.customer_id
-        WHERE
-            o.order_date >= date '2023-01-01'""";
+        String longQuery =
+                """
+                SELECT
+                    c.customer_name,
+                    c.customer_region,
+                    COUNT(o.order_id) AS total_orders,
+                    SUM(o.order_value) AS total_revenue
+                FROM
+                    hive.sales_data.customers AS c
+                JOIN
+                    hive.sales_data.orders AS o
+                        ON c.customer_id = o.customer_id
+                WHERE
+                o.order_date >= date '2023-01-01'""";
 
         io.airlift.http.client.Request request = preparePost()
                 .setUri(URI.create("http://localhost:" + routerPort + V1_STATEMENT_PATH))

@@ -80,7 +80,7 @@ public class RoutingTargetHandler
             return new RoutingTargetResponse(
                     new RoutingDestination(routingGroup, cluster, buildUriWithNewCluster(cluster, request), externalUrl),
                     request);
-        }).orElse(getRoutingTargetResponse(request));
+        }).orElseGet(() -> getRoutingTargetResponse(request));
 
         logRewrite(routingTargetResponse.routingDestination().clusterHost(), request);
         return routingTargetResponse;
@@ -116,7 +116,7 @@ public class RoutingTargetHandler
     {
         private final Map<String, String> customHeaders;
 
-        public HeaderModifyingRequestWrapper(HttpServletRequest request, Map<String, String> customHeaders)
+        private HeaderModifyingRequestWrapper(HttpServletRequest request, Map<String, String> customHeaders)
         {
             super(request);
             this.customHeaders = customHeaders;

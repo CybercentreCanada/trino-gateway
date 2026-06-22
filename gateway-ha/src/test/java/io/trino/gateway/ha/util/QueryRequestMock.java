@@ -37,7 +37,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.StringReader;
+import java.io.Reader;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -107,8 +107,7 @@ public class QueryRequestMock
             }
 
             @Override
-            public void setReadListener(ReadListener readListener)
-            {}
+            public void setReadListener(ReadListener readListener) {}
 
             @Override
             public int read()
@@ -118,7 +117,7 @@ public class QueryRequestMock
             }
         });
 
-        when(mockRequest.getReader()).thenReturn(new BufferedReader(new StringReader(query)));
+        when(mockRequest.getReader()).thenReturn(new BufferedReader(Reader.of(query)));
         when(mockRequest.getQueryString()).thenReturn("");
         return this;
     }
@@ -143,7 +142,7 @@ public class QueryRequestMock
         HaGatewayConfiguration config = new HaGatewayConfiguration();
         config.setRequestAnalyzerConfig(requestAnalyzerConfig);
 
-        PathFilter pathFilter = new PathFilter(config.getStatementPaths(), config.getExtraWhitelistPaths());
+        PathFilter pathFilter = new PathFilter(config);
 
         QueryUserInfoParser userInfoParser = new QueryUserInfoParser(config, pathFilter);
         try {

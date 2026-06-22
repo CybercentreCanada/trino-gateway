@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.FluentFuture;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.inject.Inject;
+import io.airlift.http.client.HeaderName;
 import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.StaticBodyGenerator;
@@ -50,15 +51,16 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.net.HttpHeaders.VIA;
-import static com.google.common.net.HttpHeaders.X_FORWARDED_FOR;
-import static com.google.common.net.HttpHeaders.X_FORWARDED_HOST;
-import static com.google.common.net.HttpHeaders.X_FORWARDED_PORT;
-import static com.google.common.net.HttpHeaders.X_FORWARDED_PROTO;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static io.airlift.http.client.HeaderNames.VIA;
+import static io.airlift.http.client.HeaderNames.X_FORWARDED_FOR;
+import static io.airlift.http.client.HeaderNames.X_FORWARDED_HOST;
+import static io.airlift.http.client.HeaderNames.X_FORWARDED_PORT;
+import static io.airlift.http.client.HeaderNames.X_FORWARDED_PROTO;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.Request.Builder.prepareGet;
+import static io.airlift.http.client.Request.Builder.prepareHead;
 import static io.airlift.http.client.Request.Builder.preparePost;
 import static io.airlift.http.client.Request.Builder.preparePut;
 import static io.airlift.http.client.StaticBodyGenerator.createStaticBodyGenerator;
@@ -78,6 +80,9 @@ public class ProxyRequestHandler
 {
     private static final Logger log = Logger.get(ProxyRequestHandler.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final List<String> PRESERVED_HEADERS_TO_SKIP = List.of(
+            "Accept-Encoding",
+            "Host");
 
     private final Duration asyncTimeout;
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("proxy-%s"));
@@ -85,7 +90,7 @@ public class ProxyRequestHandler
     private final RoutingManager routingManager;
     private final QueryHistoryManager queryHistoryManager;
     private final boolean cookiesEnabled;
-    private final boolean addXForwardedHeaders;
+    private final boolean forwardedHeadersEnabled;
     private final List<String> statementPaths;
     private final boolean includeClusterInfoInResponse;
     private final ProxyResponseConfiguration proxyResponseConfiguration;
@@ -102,7 +107,7 @@ public class ProxyRequestHandler
         this.queryHistoryManager = requireNonNull(queryHistoryManager, "queryHistoryManager is null");
         cookiesEnabled = GatewayCookieConfigurationPropertiesProvider.getInstance().isEnabled();
         asyncTimeout = haGatewayConfiguration.getRouting().getAsyncTimeout();
-        addXForwardedHeaders = haGatewayConfiguration.getRouting().isAddXForwardedHeaders();
+        forwardedHeadersEnabled = haGatewayConfiguration.getRouting().isForwardedHeadersEnabled();
         statementPaths = haGatewayConfiguration.getStatementPaths();
         this.includeClusterInfoInResponse = haGatewayConfiguration.isIncludeClusterHostInResponse();
         proxyResponseConfiguration = haGatewayConfiguration.getProxyResponseConfiguration();
@@ -154,6 +159,15 @@ public class ProxyRequestHandler
         performRequest(routingDestination, servletRequest, asyncResponse, request);
     }
 
+    public void headRequest(
+            HttpServletRequest servletRequest,
+            AsyncResponse asyncResponse,
+            RoutingDestination routingDestination)
+    {
+        Request.Builder request = prepareHead();
+        performRequest(routingDestination, servletRequest, asyncResponse, request);
+    }
+
     private void performRequest(
             RoutingDestination routingDestination,
             HttpServletRequest servletRequest,
@@ -163,20 +177,7 @@ public class ProxyRequestHandler
         URI remoteUri = routingDestination.clusterUri();
         requestBuilder.setUri(remoteUri);
 
-        for (String name : list(servletRequest.getHeaderNames())) {
-            for (String value : list(servletRequest.getHeaders(name))) {
-                // TODO: decide what should and shouldn't be forwarded
-                if (!name.equalsIgnoreCase("Accept-Encoding")
-                        && !name.equalsIgnoreCase("Host")
-                        && (addXForwardedHeaders || !name.startsWith("X-Forwarded"))) {
-                    requestBuilder.addHeader(name, value);
-                }
-            }
-        }
-        requestBuilder.addHeader(VIA, format("%s TrinoGateway", servletRequest.getProtocol()));
-        if (addXForwardedHeaders) {
-            addXForwardedHeaders(servletRequest, requestBuilder);
-        }
+        setupRequestHeaders(servletRequest, requestBuilder);
 
         ImmutableList.Builder<NewCookie> cookieBuilder = ImmutableList.builder();
         cookieBuilder.addAll(getOAuth2GatewayCookie(remoteUri, servletRequest));
@@ -266,7 +267,10 @@ public class ProxyRequestHandler
                         .build());
     }
 
-    private ProxyResponse recordBackendForQueryId(Request request, ProxyResponse response, Optional<String> username,
+    private ProxyResponse recordBackendForQueryId(
+            Request request,
+            ProxyResponse response,
+            Optional<String> username,
             RoutingDestination routingDestination)
     {
         log.debug("For Request [%s] got Response [%s]", request.getUri(), response.body());
@@ -281,6 +285,7 @@ public class ProxyRequestHandler
                 queryDetail.setQueryId(results.get("id"));
                 routingManager.setBackendForQueryId(queryDetail.getQueryId(), queryDetail.getBackendUrl());
                 routingManager.setRoutingGroupForQueryId(queryDetail.getQueryId(), routingDestination.routingGroup());
+                routingManager.setExternalUrlForQueryId(queryDetail.getQueryId(), routingDestination.externalUrl());
                 log.debug("QueryId [%s] mapped with proxy [%s]", queryDetail.getQueryId(), queryDetail.getBackendUrl());
             }
             catch (IOException e) {
@@ -309,7 +314,44 @@ public class ProxyRequestHandler
         return queryDetail;
     }
 
-    private void addXForwardedHeaders(HttpServletRequest servletRequest, Request.Builder requestBuilder)
+    private void setupRequestHeaders(HttpServletRequest servletRequest, Request.Builder requestBuilder)
+    {
+        for (String name : list(servletRequest.getHeaderNames())) {
+            if (shouldForwardHeader(name)) {
+                for (String value : list(servletRequest.getHeaders(name))) {
+                    requestBuilder.addHeader(HeaderName.of(name), value);
+                }
+            }
+        }
+
+        requestBuilder.addHeader(VIA, format("%s TrinoGateway", servletRequest.getProtocol()));
+
+        if (forwardedHeadersEnabled) {
+            addForwardedHeaders(servletRequest, requestBuilder);
+        }
+    }
+
+    private static boolean isForwardedHeader(String name)
+    {
+        return name.regionMatches(true, 0, "X-Forwarded-", 0, 12)
+                || name.equalsIgnoreCase("Forwarded");
+    }
+
+    // TODO: decide what else should and shouldn't be forwarded
+    private boolean shouldForwardHeader(String name)
+    {
+        for (String headerToSkip : PRESERVED_HEADERS_TO_SKIP) {
+            if (name.equalsIgnoreCase(headerToSkip)) {
+                return false;
+            }
+        }
+        if (isForwardedHeader(name) && !forwardedHeadersEnabled) {
+            return false;
+        }
+        return true;
+    }
+
+    private static void addForwardedHeaders(HttpServletRequest servletRequest, Request.Builder requestBuilder)
     {
         requestBuilder.addHeader(X_FORWARDED_FOR, servletRequest.getRemoteAddr());
         requestBuilder.addHeader(X_FORWARDED_PROTO, servletRequest.getScheme());

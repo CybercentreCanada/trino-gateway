@@ -33,10 +33,10 @@ import org.junit.jupiter.api.TestInstance;
 import org.testcontainers.containers.FixedHostPortGenericContainer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.containers.wait.strategy.WaitAllStrategy;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -76,7 +76,7 @@ final class TestOIDC
     {
         Network network = Network.newNetwork();
 
-        PostgreSQLContainer<?> databaseContainer = createPostgreSqlContainer()
+        PostgreSQLContainer databaseContainer = createPostgreSqlContainer()
                 .withNetwork(network)
                 .withNetworkAliases("hydra-db")
                 .withUsername("hydra")
@@ -133,17 +133,28 @@ final class TestOIDC
         GenericContainer clientCreatingContainer = new GenericContainer(HYDRA_IMAGE)
                 .withNetwork(network)
                 .dependsOn(hydra)
-                .withCommand("clients", "create",
-                        "--endpoint", "http://hydra:4445",
+                .withCommand(
+                        "clients",
+                        "create",
+                        "--endpoint",
+                        "http://hydra:4445",
                         "--skip-tls-verify",
-                        "--id", clientId,
-                        "--secret", clientSecret,
-                        "--audience", audience,
-                        "-g", "authorization_code,refresh_token,client_credentials",
-                        "-r", "token,code,id_token",
-                        "--scope", "openid,offline",
-                        "--token-endpoint-auth-method", tokenEndpointAuthMethod,
-                        "--callbacks", callbackUrl);
+                        "--id",
+                        clientId,
+                        "--secret",
+                        clientSecret,
+                        "--audience",
+                        audience,
+                        "-g",
+                        "authorization_code,refresh_token,client_credentials",
+                        "-r",
+                        "token,code,id_token",
+                        "--scope",
+                        "openid,offline",
+                        "--token-endpoint-auth-method",
+                        tokenEndpointAuthMethod,
+                        "--callbacks",
+                        callbackUrl);
         clientCreatingContainer.start();
 
         PostgreSQLContainer gatewayBackendDatabase = createPostgreSqlContainer();
@@ -244,7 +255,7 @@ final class TestOIDC
         sslContext.init(null, new TrustManager[] {trustAllCerts}, new SecureRandom());
 
         clientBuilder.sslSocketFactory(sslContext.getSocketFactory(), trustAllCerts);
-        clientBuilder.hostnameVerifier((hostname, session) -> true);
+        clientBuilder.hostnameVerifier((_, _) -> true);
     }
 
     public static class BadCookieJar

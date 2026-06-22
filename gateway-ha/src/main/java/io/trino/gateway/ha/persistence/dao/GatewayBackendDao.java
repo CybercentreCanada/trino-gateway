@@ -23,59 +23,47 @@ public interface GatewayBackendDao
     @SqlQuery("SELECT * FROM gateway_backend")
     List<GatewayBackend> findAll();
 
-    @SqlQuery("""
-            SELECT * FROM gateway_backend
-            WHERE active = true
-            """)
-    List<GatewayBackend> findActiveBackend();
-
-    @SqlQuery("""
-            SELECT * FROM gateway_backend
-            WHERE active = true AND routing_group = :routingGroup
-            """)
-    List<GatewayBackend> findActiveBackendByRoutingGroup(String routingGroup);
-
-    @SqlQuery("""
-            SELECT * FROM gateway_backend
-            WHERE name = :name
-            """)
-    List<GatewayBackend> findByName(String name);
-
-    @SqlQuery("""
+    @SqlQuery(
+            """
             SELECT * FROM gateway_backend
             WHERE name = :name
             LIMIT 1
             """)
     GatewayBackend findFirstByName(String name);
 
-    @SqlUpdate("""
+    @SqlUpdate(
+            """
             INSERT INTO gateway_backend (name, routing_group, backend_url, external_url, active)
             VALUES (:name, :routingGroup, :backendUrl, :externalUrl, :active)
             """)
     void create(String name, String routingGroup, String backendUrl, String externalUrl, boolean active);
 
-    @SqlUpdate("""
+    @SqlUpdate(
+            """
             UPDATE gateway_backend
             SET routing_group = :routingGroup, backend_url = :backendUrl, external_url = :externalUrl, active = :active
             WHERE name = :name
             """)
     void update(String name, String routingGroup, String backendUrl, String externalUrl, boolean active);
 
-    @SqlUpdate("""
+    @SqlUpdate(
+            """
             UPDATE gateway_backend
             SET active = false
             WHERE name = :name
             """)
     void deactivate(String name);
 
-    @SqlUpdate("""
+    @SqlUpdate(
+            """
             UPDATE gateway_backend
             SET active = true
             WHERE name = :name
             """)
     void activate(String name);
 
-    @SqlUpdate("""
+    @SqlUpdate(
+            """
             DELETE FROM gateway_backend
             WHERE name = :name
             """)

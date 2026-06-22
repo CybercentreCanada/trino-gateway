@@ -7,6 +7,7 @@ import { hasPagePermission, routers, routersMapper } from '../router';
 import { Theme, useAccessStore, useConfigStore } from '../store';
 import { getUIConfiguration, logoutApi } from '../api/webapp/login';
 import Locale from "../locales";
+import { TimezoneDropdown } from "./TimezoneContext";
 
 export const RootLayout = (props: {
   children: React.ReactNode
@@ -78,13 +79,12 @@ export const RootLayout = (props: {
                 />
               ),
               text: (
-                <Link to="/" style={{ textDecoration: "none" }}>
-                  Trino Gateway
-                </Link>
+                <div>Trino Gateway</div>
               ),
             }}
             footer={
               <div className={styles.dIV}>
+                <TimezoneDropdown />
                 <Button icon={
                   theme === Theme.Auto ? (
                     <IconMark className={styles.semiIconsBell} />
