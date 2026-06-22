@@ -35,8 +35,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.TrinoContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.trino.TrinoContainer;
 
 import java.io.File;
 import java.io.IOException;
@@ -60,7 +60,7 @@ final class TestGatewayHaMultipleBackend
     public static final String CUSTOM_RESPONSE = "123";
     public static final String CUSTOM_PATH = "/v1/custom/extra";
 
-    public static final String CUSTOM_LOGOUT = "/custom/logout"; //defined in src/test/resources/test-config-template.yml
+    public static final String CUSTOM_LOGOUT = "/custom/logout"; // defined in src/test/resources/test-config-template.yml
 
     private static final MediaType MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
@@ -96,7 +96,8 @@ final class TestGatewayHaMultipleBackend
         int backend2Port = scheduledTrino.getMappedPort(8080);
 
         HaGatewayTestUtils.prepareMockBackend(customBackend, customBackendPort, "default custom response");
-        customBackend.setDispatcher(new Dispatcher() {
+        customBackend.setDispatcher(new Dispatcher()
+        {
             @Override
             public MockResponse dispatch(RecordedRequest request)
             {
@@ -127,10 +128,18 @@ final class TestGatewayHaMultipleBackend
         HaGatewayTestUtils.setUpBackend(
                 "trino1", "http://localhost:" + backend1Port, "externalUrl", true, "adhoc", routerPort);
         HaGatewayTestUtils.setUpBackend(
-                "trino2", "http://localhost:" + backend2Port, "externalUrl", true, "scheduled",
+                "trino2",
+                "http://localhost:" + backend2Port,
+                "externalUrl",
+                true,
+                "scheduled",
                 routerPort);
         HaGatewayTestUtils.setUpBackend(
-                "custom", "http://localhost:" + customBackendPort, "externalUrl", true, "custom",
+                "custom",
+                "http://localhost:" + customBackendPort,
+                "externalUrl",
+                true,
+                "custom",
                 routerPort);
     }
 

@@ -89,7 +89,7 @@ final class TestRoutingManagerExternalUrlCache
         String[] externalUrls = {
                 "https://gateway1.example.com",
                 "https://gateway2.example.com",
-                "https://gateway3.example.com"
+                "https://gateway3.example.com",
         };
 
         for (int i = 0; i < queryIds.length; i++) {
@@ -131,8 +131,10 @@ final class TestRoutingManagerExternalUrlCache
     private static class TestRoutingManager
             extends StochasticRoutingManager
     {
-        public TestRoutingManager(GatewayBackendManager gatewayBackendManager, QueryHistoryManager queryHistoryManager,
-                                  RoutingConfiguration routingConfiguration)
+        private TestRoutingManager(
+                GatewayBackendManager gatewayBackendManager,
+                QueryHistoryManager queryHistoryManager,
+                RoutingConfiguration routingConfiguration)
         {
             super(gatewayBackendManager, queryHistoryManager, routingConfiguration);
         }

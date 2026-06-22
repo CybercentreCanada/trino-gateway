@@ -25,8 +25,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.TrinoContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.trino.TrinoContainer;
 
 import java.io.File;
 
@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.testcontainers.utility.MountableFile.forClasspathResource;
 
 @TestInstance(Lifecycle.PER_CLASS)
-final class TestNoXForwarded
+final class TestForwardedHeadersDisabled
 {
     private final OkHttpClient httpClient = new OkHttpClient();
     private TrinoContainer trino;
@@ -56,7 +56,7 @@ final class TestNoXForwarded
         postgresql.start();
 
         File testConfigFile =
-                HaGatewayTestUtils.buildGatewayConfig(postgresql, routerPort, "test-config-without-x-forwarded-template.yml");
+                HaGatewayTestUtils.buildGatewayConfig(postgresql, routerPort, "test-config-with-forwarded-headers-disabled-template.yml");
         // Start Gateway
         String[] args = {testConfigFile.getAbsolutePath()};
         HaGatewayLauncher.main(args);

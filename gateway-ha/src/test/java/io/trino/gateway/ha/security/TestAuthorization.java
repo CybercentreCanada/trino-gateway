@@ -29,7 +29,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.io.File;
 import java.io.IOException;
@@ -112,7 +112,7 @@ final class TestAuthorization
                 .post(emptyRequestBody);
         if (credentials.isPresent()) {
             String encodedCredentials = "Basic " + Base64.getEncoder().encodeToString(credentials.orElseThrow().getBytes(StandardCharsets.ISO_8859_1));
-            credentials.ifPresent(s -> builder.addHeader("Authorization", encodedCredentials));
+            credentials.ifPresent(_ -> builder.addHeader("Authorization", encodedCredentials));
         }
         return httpClient.newCall(builder.build()).execute();
     }

@@ -28,8 +28,8 @@ import okhttp3.Response;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.TrinoContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.trino.TrinoContainer;
 
 import java.io.File;
 import java.util.List;
@@ -44,7 +44,7 @@ final class TestRoutingAPI
     public static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final OkHttpClient httpClient = new OkHttpClient();
     private TrinoContainer trino;
-    private final PostgreSQLContainer<?> postgresql = createPostgreSqlContainer();
+    private final PostgreSQLContainer postgresql = createPostgreSqlContainer();
     int routerPort = 21001 + (int) (Math.random() * 1000);
     int backendPort;
 
@@ -101,7 +101,7 @@ final class TestRoutingAPI
     void testUpdateRoutingRulesAPI()
             throws Exception
     {
-        //Update routing rules with a new rule
+        // Update routing rules with a new rule
         RoutingRule updatedRoutingRules = new RoutingRule("airflow", "if query from airflow, route to adhoc group", 0, List.of("result.put(\"routingGroup\", \"adhoc\")"), "request.getHeader(\"X-Trino-Source\") == \"JDBC\"");
         RequestBody requestBody = RequestBody.create(OBJECT_MAPPER.writeValueAsString(updatedRoutingRules), MediaType.parse("application/json; charset=utf-8"));
         Request request = new Request.Builder()
@@ -113,7 +113,7 @@ final class TestRoutingAPI
 
         assertThat(response.code()).isEqualTo(200);
 
-        //Fetch the routing rules to see if the update was successful
+        // Fetch the routing rules to see if the update was successful
         Request request2 =
                 new Request.Builder()
                         .url("http://localhost:" + routerPort + "/webapp/getRoutingRules")
@@ -135,7 +135,7 @@ final class TestRoutingAPI
         assertThat(routingRules[0].condition()).isEqualTo("request.getHeader(\"X-Trino-Source\") == \"JDBC\"");
         assertThat(routingRules[0].actions()).first().isEqualTo("result.put(\"routingGroup\", \"adhoc\")");
 
-        //Revert back to old routing rules to avoid any test failures
+        // Revert back to old routing rules to avoid any test failures
         RoutingRule revertRoutingRules = new RoutingRule("airflow", "if query from airflow, route to etl group", 0, List.of("result.put(\"routingGroup\", \"etl\")"), "request.getHeader(\"X-Trino-Source\") == \"airflow\"");
         RequestBody requestBody3 = RequestBody.create(OBJECT_MAPPER.writeValueAsString(revertRoutingRules), MediaType.parse("application/json; charset=utf-8"));
         Request request3 = new Request.Builder()

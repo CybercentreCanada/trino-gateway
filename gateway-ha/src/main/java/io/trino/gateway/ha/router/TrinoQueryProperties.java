@@ -44,6 +44,7 @@ import io.trino.sql.tree.Execute;
 import io.trino.sql.tree.ExecuteImmediate;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.Identifier;
+import io.trino.sql.tree.Insert;
 import io.trino.sql.tree.Node;
 import io.trino.sql.tree.NodeLocation;
 import io.trino.sql.tree.QualifiedName;
@@ -52,10 +53,8 @@ import io.trino.sql.tree.RenameMaterializedView;
 import io.trino.sql.tree.RenameSchema;
 import io.trino.sql.tree.RenameTable;
 import io.trino.sql.tree.RenameView;
+import io.trino.sql.tree.SetAuthorizationStatement;
 import io.trino.sql.tree.SetProperties;
-import io.trino.sql.tree.SetSchemaAuthorization;
-import io.trino.sql.tree.SetTableAuthorization;
-import io.trino.sql.tree.SetViewAuthorization;
 import io.trino.sql.tree.ShowColumns;
 import io.trino.sql.tree.ShowCreate;
 import io.trino.sql.tree.ShowSchemas;
@@ -95,26 +94,27 @@ import static java.util.Objects.requireNonNullElse;
 
 public class TrinoQueryProperties
 {
+    public static final String TRINO_CATALOG_HEADER_NAME = "X-Trino-Catalog";
+    public static final String TRINO_SCHEMA_HEADER_NAME = "X-Trino-Schema";
+    public static final String TRINO_PREPARED_STATEMENT_HEADER_NAME = "X-Trino-Prepared-Statement";
+
     private final Logger log = Logger.get(TrinoQueryProperties.class);
     private final boolean isClientsUseV2Format;
     private final int maxBodySize;
+    private final Optional<String> defaultCatalog;
+    private final Optional<String> defaultSchema;
+    private final ZstdDecompressor decompressor = ZstdDecompressor.create();
+
     private String body = "";
     private String queryType = "";
     private String resourceGroupQueryType = "";
     private Set<QualifiedName> tables = ImmutableSet.of();
-    private final Optional<String> defaultCatalog;
-    private final Optional<String> defaultSchema;
     private Set<String> catalogs = ImmutableSet.of();
     private Set<String> schemas = ImmutableSet.of();
     private Set<String> catalogSchemas = ImmutableSet.of();
     private boolean isNewQuerySubmission;
     private Optional<String> errorMessage = Optional.empty();
     private Optional<String> queryId = Optional.empty();
-    private final ZstdDecompressor decompressor = ZstdDecompressor.create();
-
-    public static final String TRINO_CATALOG_HEADER_NAME = "X-Trino-Catalog";
-    public static final String TRINO_SCHEMA_HEADER_NAME = "X-Trino-Schema";
-    public static final String TRINO_PREPARED_STATEMENT_HEADER_NAME = "X-Trino-Prepared-Statement";
 
     @JsonCreator
     public TrinoQueryProperties(
@@ -148,8 +148,17 @@ public class TrinoQueryProperties
 
     public TrinoQueryProperties()
     {
-        this("", "", "", ImmutableList.of(), Optional.empty(), Optional.empty(),
-                ImmutableSet.of(), ImmutableSet.of(), ImmutableSet.of(), false, Optional.empty());
+        this("",
+                "",
+                "",
+                ImmutableList.of(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableSet.of(),
+                ImmutableSet.of(),
+                ImmutableSet.of(),
+                false,
+                Optional.empty());
     }
 
     public TrinoQueryProperties(ContainerRequestContext requestContext, boolean isClientsUseV2Format, int maxBodySize)
@@ -187,8 +196,8 @@ public class TrinoQueryProperties
             if (nChars == maxBodySize) {
                 log.warn("Query length greater or equal to requestAnalyzerConfig.maxBodySize detected");
                 return;
-                //The body is truncated - there is a chance that it could still be syntactically valid SQL, for example if truncated on
-                //whitespace preceding a UNION. Exit out of caution
+                // The body is truncated - there is a chance that it could still be syntactically valid SQL, for example if truncated on
+                // whitespace preceding a UNION. Exit out of caution
             }
             body = String.valueOf(buffer, 0, nChars);
 
@@ -264,10 +273,10 @@ public class TrinoQueryProperties
 
         String charset = mediaType.getParameters().get("charset");
         if (charset == null) {
-            log.debug("charset is not set in the request");
-            return;
+            // RFC 7231 leaves the default charset to the recipient; Trino's coordinator
+            // decodes statement bodies as UTF-8, and most Trino clients omit the parameter.
+            charset = UTF_8.name();
         }
-
         if (!UTF_8.name().equalsIgnoreCase(charset)) {
             log.debug("Request charset is not UTF-8 (%s), skipping query parsing", charset);
             return;
@@ -341,7 +350,9 @@ public class TrinoQueryProperties
         return new String(preparedStatement, UTF_8);
     }
 
-    private void visitNode(Node node, ImmutableSet.Builder<QualifiedName> tableBuilder,
+    private void visitNode(
+            Node node,
+            ImmutableSet.Builder<QualifiedName> tableBuilder,
             ImmutableSet.Builder<String> catalogBuilder,
             ImmutableSet.Builder<String> schemaBuilder,
             ImmutableSet.Builder<String> catalogSchemaBuilder,
@@ -361,6 +372,7 @@ public class TrinoQueryProperties
             case DropCatalog s -> catalogBuilder.add(s.getCatalogName().getValue());
             case DropSchema s -> setCatalogAndSchemaNameFromSchemaQualifiedName(Optional.of(s.getSchemaName()), catalogBuilder, schemaBuilder, catalogSchemaBuilder);
             case DropTable s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case Insert s -> tableBuilder.add(qualifyName(s.getTarget()));
             case Query q -> q.getWith().ifPresent(with -> temporaryTables.addAll(with.getQueries().stream().map(WithQuery::getName).map(Identifier::getValue).map(QualifiedName::of).toList()));
             case RenameMaterializedView s -> {
                 tableBuilder.add(qualifyName(s.getSource()));
@@ -417,9 +429,14 @@ public class TrinoQueryProperties
             }
             case ShowSchemas s -> catalogBuilder.add(s.getCatalog().map(Identifier::getValue).or(() -> defaultCatalog).orElseThrow(this::unsetDefaultExceptionSupplier));
             case ShowTables s -> setCatalogAndSchemaNameFromSchemaQualifiedName(s.getSchema(), catalogBuilder, schemaBuilder, catalogSchemaBuilder);
-            case SetSchemaAuthorization s -> setCatalogAndSchemaNameFromSchemaQualifiedName(Optional.of(s.getSource()), catalogBuilder, schemaBuilder, catalogSchemaBuilder);
-            case SetTableAuthorization s -> tableBuilder.add(qualifyName(s.getSource()));
-            case SetViewAuthorization s -> tableBuilder.add(qualifyName(s.getSource()));
+            case SetAuthorizationStatement setAuthorization -> {
+                if (setAuthorization.getOwnedEntityKind().equals("SCHEMA")) {
+                    setCatalogAndSchemaNameFromSchemaQualifiedName(Optional.of(setAuthorization.getSource()), catalogBuilder, schemaBuilder, catalogSchemaBuilder);
+                }
+                else {
+                    tableBuilder.add(qualifyName(setAuthorization.getSource()));
+                }
+            }
             case Table s -> {
                 // ignore temporary tables as they can have various table parts
                 if (!temporaryTables.contains(s.getName())) {
@@ -457,7 +474,10 @@ public class TrinoQueryProperties
         if (schemaOptional.isEmpty()) {
             schemaBuilder.add(defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier));
             catalogBuilder.add(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier));
-            catalogSchemaBuilder.add(format("%s.%s", defaultCatalog, defaultSchema));
+            catalogSchemaBuilder.add(format(
+                    "%s.%s",
+                    defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier),
+                    defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier)));
         }
         else {
             QualifiedName schema = schemaOptional.orElseThrow();
@@ -465,7 +485,7 @@ public class TrinoQueryProperties
                 case 1 -> {
                     schemaBuilder.add(schema.getParts().getFirst());
                     catalogBuilder.add(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier));
-                    catalogSchemaBuilder.add(format("%s.%s", defaultCatalog, schema.getParts().getFirst()));
+                    catalogSchemaBuilder.add(format("%s.%s", defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), schema.getParts().getFirst()));
                 }
                 case 2 -> {
                     schemaBuilder.add(schema.getParts().get(1));
@@ -487,8 +507,7 @@ public class TrinoQueryProperties
     {
         List<String> nameParts = name.getParts();
         return switch (nameParts.size()) {
-            case 1 ->
-                    QualifiedName.of(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier), nameParts.getFirst());
+            case 1 -> QualifiedName.of(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier), nameParts.getFirst());
             case 2 -> QualifiedName.of(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), nameParts.getFirst(), nameParts.get(1));
             case 3 -> QualifiedName.of(nameParts.getFirst(), nameParts.get(1), nameParts.get(2));
             default -> throw new RequestParsingException("Unexpected qualified name: " + name.getParts());
@@ -565,7 +584,7 @@ public class TrinoQueryProperties
             parts.add(new Identifier(name.substring(start, name.length() - 1)));
         }
         else {
-            parts.add(new Identifier(name.substring(start, name.length())));
+            parts.add(new Identifier(name.substring(start)));
         }
         return QualifiedName.of(parts);
     }
