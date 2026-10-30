@@ -14,32 +14,36 @@
 package io.trino.gateway.ha;
 
 import io.trino.gateway.ha.config.DataStoreConfiguration;
-import io.trino.gateway.ha.module.HaGatewayProviderModule;
-import io.trino.gateway.ha.persistence.JdbcConnectionManager;
-import org.jdbi.v3.core.Jdbi;
+import io.trino.gateway.ha.persistence.FlywayMigration;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import static io.trino.gateway.ha.util.TestcontainersUtils.createPostgreSqlContainer;
 
 public final class TestingJdbcConnectionManager
 {
     private TestingJdbcConnectionManager() {}
 
-    public static DataStoreConfiguration dataStoreConfig()
+    public static PostgreSQLContainer createTestingPostgresContainer()
     {
-        File tempH2DbDir = Path.of(System.getProperty("java.io.tmpdir"), "h2db-" + System.currentTimeMillis()).toFile();
-        tempH2DbDir.deleteOnExit();
-        String jdbcUrl = "jdbc:h2:" + tempH2DbDir.getAbsolutePath() + ";NON_KEYWORDS=NAME,VALUE";
-        HaGatewayTestUtils.seedRequiredData(tempH2DbDir.getAbsolutePath());
-        return new DataStoreConfiguration(jdbcUrl, "sa", "sa", "org.h2.Driver", true, 4, false);
+        PostgreSQLContainer postgres = createPostgreSqlContainer()
+                .withDatabaseName("testdb");
+        postgres.start();
+        return postgres;
     }
 
-    public static JdbcConnectionManager createTestingJdbcConnectionManager(DataStoreConfiguration config)
+    public static DataStoreConfiguration dataStoreConfig(PostgreSQLContainer postgres)
     {
-        Jdbi jdbi = HaGatewayProviderModule.createJdbi(config);
-        return new JdbcConnectionManager(jdbi, config);
+        DataStoreConfiguration config = new DataStoreConfiguration(
+                postgres.getJdbcUrl(),
+                postgres.getUsername(),
+                postgres.getPassword(),
+                postgres.getDriverClassName(),
+                true,
+                4,
+                true,
+                null);
+        FlywayMigration.migrate(config);
+        return config;
     }
 
     public static void destroyTestingDatabase(DataStoreConfiguration config)

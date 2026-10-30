@@ -12,13 +12,16 @@
  * limitations under the License.
  */
 package io.trino.gateway.ha.resource;
-
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
+import io.trino.gateway.ha.config.AuthenticationConfiguration;
+import io.trino.gateway.ha.config.AuthenticationType;
+import io.trino.gateway.ha.config.HaGatewayConfiguration;
 import io.trino.gateway.ha.domain.Result;
 import io.trino.gateway.ha.domain.request.RestLoginRequest;
 import io.trino.gateway.ha.security.LbFormAuthManager;
+import io.trino.gateway.ha.security.LbJwtManager;
 import io.trino.gateway.ha.security.LbOAuthManager;
 import io.trino.gateway.ha.security.LbPrincipal;
 import io.trino.gateway.ha.security.OidcCookie;
@@ -34,18 +37,20 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Cookie;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
 
 import java.net.URI;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.gateway.ha.security.LbOAuthManager.buildUnauthorizedResponse;
 import static io.trino.gateway.ha.security.OidcCookie.OIDC_COOKIE;
+import static io.trino.gateway.ha.security.util.AuthenticationTypeResolver.resolveEffectiveTypes;
 
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
@@ -53,15 +58,24 @@ public class LoginResource
 {
     private static final Logger log = Logger.get(LoginResource.class);
     public static final String CALLBACK_ENDPOINT = "oidc/callback";
-
+    // UI sentinel returned by /loginType when no authentication is configured; it is not a
+    // configurable authentication type (see AuthenticationType) and maps to the passwordless form.
+    private static final String NO_AUTHENTICATION_TYPE = "none";
     private final LbOAuthManager oauthManager;
     private final LbFormAuthManager formAuthManager;
+    private final LbJwtManager jwtManager;
+    private final List<String> loginTypes;
 
     @Inject
-    public LoginResource(@Nullable LbOAuthManager oauthManager, @Nullable LbFormAuthManager formAuthManager)
+    public LoginResource(HaGatewayConfiguration haGatewayConfiguration, @Nullable LbOAuthManager oauthManager, @Nullable LbFormAuthManager formAuthManager, @Nullable LbJwtManager jwtManager)
     {
         this.oauthManager = oauthManager;
         this.formAuthManager = formAuthManager;
+        this.jwtManager = jwtManager;
+        // Resolve the authentication methods advertised by /loginType once, at startup: the
+        // list is derived purely from static configuration, so recomputing it on every request
+        // would only risk per-request log spam and 500s instead of failing fast at boot.
+        this.loginTypes = resolveLoginTypes(haGatewayConfiguration.getAuthentication(), oauthManager != null, formAuthManager != null, jwtManager != null);
     }
 
     @GET
@@ -156,8 +170,11 @@ public class LoginResource
         else if (oauthManager != null) {
             pagePermissions = oauthManager.processPagePermissions(roles);
         }
+        else if (jwtManager != null) {
+            pagePermissions = jwtManager.processPagePermissions(roles);
+        }
         else {
-            pagePermissions = Collections.emptyList();
+            pagePermissions = List.of();
         }
         Map<String, Object> resMap = Map.of(
                 "roles", roles,
@@ -173,16 +190,38 @@ public class LoginResource
     @Produces(MediaType.APPLICATION_JSON)
     public Response loginType()
     {
-        String loginType;
-        if (formAuthManager != null) {
-            loginType = "form";
+        return Response.ok(Result.ok("Ok", loginTypes)).build();
+    }
+
+    private static List<String> resolveLoginTypes(@Nullable AuthenticationConfiguration authentication, boolean oauthConfigured, boolean formConfigured, boolean jwtConfigured)
+    {
+        if (authentication == null) {
+            return ImmutableList.of(NO_AUTHENTICATION_TYPE);
         }
-        else if (oauthManager != null) {
-            loginType = "oauth";
+        List<AuthenticationType> resolvedTypes = resolveEffectiveTypes(
+                authentication.getDefaultType(),
+                oauthConfigured,
+                formConfigured,
+                jwtConfigured);
+        if (authentication.isShowFirstTypeOnly()) {
+            resolvedTypes = List.of(resolvedTypes.getFirst());
         }
-        else {
-            loginType = "none";
+        return resolvedTypes.stream()
+                .map(AuthenticationType::value)
+                .collect(toImmutableList());
+    }
+
+    @POST
+    @Path("token")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response token(@Context HttpHeaders headers)
+    {
+        String authHeaderVal = headers.getHeaderString(HttpHeaders.AUTHORIZATION);
+        String bearerToken = null;
+        if (authHeaderVal != null && authHeaderVal.startsWith("Bearer ")) {
+            bearerToken = authHeaderVal.substring("Bearer ".length());
         }
-        return Response.ok(Result.ok("Ok", loginType)).build();
+        return Response.ok(Result.ok("Ok", bearerToken)).build();
     }
 }

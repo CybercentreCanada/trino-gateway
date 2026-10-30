@@ -41,7 +41,8 @@ RUN \
     dnf install --installroot /tmp/overlay --setopt install_weak_deps=false --nodocs -y \
       gettext \
       less \
-      zlib `#required by java` \
+      libstdc++ `# required by Brotli native library` \
+      zlib `# required by java` \
       curl-minimal grep `# required by health-check` \
       shadow-utils `# required by useradd` \
       tar `# required to support kubectl cp` && \

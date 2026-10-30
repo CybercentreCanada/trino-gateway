@@ -15,6 +15,7 @@ import { useAccessStore, useConfigStore } from './store';
 import { useEffect } from 'react';
 import { getCSSVar } from './utils/utils';
 import { IllustrationIdle, IllustrationIdleDark } from '@douyinfe/semi-illustrations';
+import { fetchTokenApi, loginTypeApi } from './api/webapp/login';
 import Cookies from 'js-cookie';
 import { TimezoneProvider } from "./components/TimezoneContext";
 
@@ -37,7 +38,9 @@ function App() {
 function Screen() {
   useSwitchTheme()
   const access = useAccessStore();
+  const updateToken = useAccessStore(state => state.updateToken);
   useEffect(() => {
+<<<<<<< HEAD
     const tokenChunks = [];
     let index = 0;
 
@@ -60,8 +63,42 @@ function Screen() {
       }
     } else {
       console.error("[App.tsx] No token chunk cookies found — likely login flow issue");
+=======
+    // Prevent multiple initialization runs
+    if (useAccessStore.getState().token) {
+      return;
+>>>>>>> tags/22
     }
-  }, [])
+
+    // Conditionally use JWT server API or cookie based on authentication type
+    const initializeToken = async () => {
+      try {
+        const authTypes = await loginTypeApi();
+        let token: string | undefined;
+
+        if (authTypes.includes('jwt')) {
+          try {
+            token = await fetchTokenApi();
+          } catch (error) {
+            console.error('Error retrieving the upstream JWT:', error);
+          }
+        }
+
+        if (!token) {
+          token = Cookies.get('token');
+        }
+
+        if (token) {
+          updateToken(token);
+          Cookies.remove('token');
+        }
+      } catch (error) {
+        console.error('🔍 Error during token initialization:', error);
+      }
+    };
+
+    initializeToken();
+  }, [updateToken]);
   return (
     <>
       {access.isAuthorized() ? (

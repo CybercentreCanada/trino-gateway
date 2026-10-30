@@ -274,9 +274,10 @@ final class TestGatewayHaMultipleBackend
         assertThat(backendConfiguration[0].isActive()).isTrue();
         assertThat(backendConfiguration[1].isActive()).isTrue();
         assertThat(backendConfiguration[2].isActive()).isTrue();
-        assertThat(backendConfiguration[0].getRoutingGroup()).isEqualTo("adhoc");
-        assertThat(backendConfiguration[1].getRoutingGroup()).isEqualTo("scheduled");
-        assertThat(backendConfiguration[2].getRoutingGroup()).isEqualTo("custom");
+        // Backends are returned ordered by name, so custom, then trino1, then trino2
+        assertThat(backendConfiguration[0].getRoutingGroup()).isEqualTo("custom");
+        assertThat(backendConfiguration[1].getRoutingGroup()).isEqualTo("adhoc");
+        assertThat(backendConfiguration[2].getRoutingGroup()).isEqualTo("scheduled");
         assertThat(backendConfiguration[0].getExternalUrl()).isEqualTo("externalUrl");
         assertThat(backendConfiguration[1].getExternalUrl()).isEqualTo("externalUrl");
         assertThat(backendConfiguration[2].getExternalUrl()).isEqualTo("externalUrl");
@@ -367,7 +368,7 @@ final class TestGatewayHaMultipleBackend
                 new Request.Builder()
                         .url("http://localhost:" + routerPort + oauthCallbackPath)
                         .post(requestBody)
-                        .addHeader("Cookie", String.format("%s=%s", tamperedCookie.getName(), tamperedCookie.getValue()))
+                        .addHeader("Cookie", "%s=%s".formatted(tamperedCookie.getName(), tamperedCookie.getValue()))
                         .build();
         Response callbackResponse = httpClient.newCall(callbackRequest).execute();
         assertThat(callbackResponse.code()).isEqualTo(500);

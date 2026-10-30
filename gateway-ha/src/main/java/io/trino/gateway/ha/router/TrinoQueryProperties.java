@@ -20,9 +20,11 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.compress.v3.MalformedInputException;
 import io.airlift.compress.v3.zstd.ZstdDecompressor;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
@@ -31,30 +33,46 @@ import io.trino.sql.parser.SqlParser;
 import io.trino.sql.tree.AddColumn;
 import io.trino.sql.tree.Analyze;
 import io.trino.sql.tree.Call;
+import io.trino.sql.tree.Comment;
+import io.trino.sql.tree.CreateBranch;
 import io.trino.sql.tree.CreateCatalog;
 import io.trino.sql.tree.CreateMaterializedView;
 import io.trino.sql.tree.CreateSchema;
 import io.trino.sql.tree.CreateTable;
 import io.trino.sql.tree.CreateTableAsSelect;
 import io.trino.sql.tree.CreateView;
+import io.trino.sql.tree.DropBranch;
 import io.trino.sql.tree.DropCatalog;
+import io.trino.sql.tree.DropColumn;
+import io.trino.sql.tree.DropDefaultValue;
+import io.trino.sql.tree.DropMaterializedView;
+import io.trino.sql.tree.DropNotNullConstraint;
 import io.trino.sql.tree.DropSchema;
 import io.trino.sql.tree.DropTable;
+import io.trino.sql.tree.DropView;
 import io.trino.sql.tree.Execute;
 import io.trino.sql.tree.ExecuteImmediate;
 import io.trino.sql.tree.Expression;
+import io.trino.sql.tree.FastForwardBranch;
 import io.trino.sql.tree.Identifier;
 import io.trino.sql.tree.Insert;
+import io.trino.sql.tree.MaterializedViewExecute;
 import io.trino.sql.tree.Node;
 import io.trino.sql.tree.NodeLocation;
 import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.Query;
+import io.trino.sql.tree.RefreshMaterializedView;
+import io.trino.sql.tree.RefreshView;
+import io.trino.sql.tree.RenameColumn;
 import io.trino.sql.tree.RenameMaterializedView;
 import io.trino.sql.tree.RenameSchema;
 import io.trino.sql.tree.RenameTable;
 import io.trino.sql.tree.RenameView;
 import io.trino.sql.tree.SetAuthorizationStatement;
+import io.trino.sql.tree.SetColumnType;
+import io.trino.sql.tree.SetDefaultValue;
 import io.trino.sql.tree.SetProperties;
+import io.trino.sql.tree.ShowBranches;
 import io.trino.sql.tree.ShowColumns;
 import io.trino.sql.tree.ShowCreate;
 import io.trino.sql.tree.ShowSchemas;
@@ -63,6 +81,7 @@ import io.trino.sql.tree.Statement;
 import io.trino.sql.tree.StringLiteral;
 import io.trino.sql.tree.Table;
 import io.trino.sql.tree.TableFunctionInvocation;
+import io.trino.sql.tree.TruncateTable;
 import io.trino.sql.tree.WithQuery;
 import jakarta.ws.rs.HttpMethod;
 import jakarta.ws.rs.container.ContainerRequestContext;
@@ -87,7 +106,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.io.BaseEncoding.base64Url;
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static java.lang.Math.toIntExact;
-import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static java.util.Objects.requireNonNullElse;
@@ -97,6 +115,11 @@ public class TrinoQueryProperties
     public static final String TRINO_CATALOG_HEADER_NAME = "X-Trino-Catalog";
     public static final String TRINO_SCHEMA_HEADER_NAME = "X-Trino-Schema";
     public static final String TRINO_PREPARED_STATEMENT_HEADER_NAME = "X-Trino-Prepared-Statement";
+
+    // Same splitting as io.trino.server.HttpRequestSessionContextFactory: proxies that merge repeated headers
+    // join them with ", ", so entries and the name=value halves are trimmed and empty entries dropped.
+    private static final Splitter HEADER_ENTRY_SPLITTER = Splitter.on(',').trimResults().omitEmptyStrings();
+    private static final Splitter HEADER_NAME_VALUE_SPLITTER = Splitter.on('=').trimResults();
 
     private final Logger log = Logger.get(TrinoQueryProperties.class);
     private final boolean isClientsUseV2Format;
@@ -243,7 +266,7 @@ public class TrinoQueryProperties
             schemaBuilder.addAll(tables.stream().map(q -> q.getParts().get(1)).iterator());
             schemas = schemaBuilder.build();
             catalogSchemaBuilder.addAll(
-                    tables.stream().map(qualifiedName -> format("%s.%s", qualifiedName.getParts().getFirst(), qualifiedName.getParts().get(1))).iterator());
+                    tables.stream().map(qualifiedName -> "%s.%s".formatted(qualifiedName.getParts().getFirst(), qualifiedName.getParts().get(1))).iterator());
             catalogSchemas = catalogSchemaBuilder.build();
         }
         catch (IOException e) {
@@ -267,16 +290,13 @@ public class TrinoQueryProperties
         }
 
         MediaType mediaType = requestContext.getMediaType();
-        if (mediaType == null) {
-            return;
-        }
 
-        String charset = mediaType.getParameters().get("charset");
-        if (charset == null) {
-            // RFC 7231 leaves the default charset to the recipient; Trino's coordinator
-            // decodes statement bodies as UTF-8, and most Trino clients omit the parameter.
-            charset = UTF_8.name();
-        }
+        // RFC 7231 leaves the default charset to the recipient; Trino's coordinator
+        // decodes statement bodies as UTF-8, and most Trino clients omit the parameter.
+        String charset = (mediaType == null)
+                ? UTF_8.name()
+                : mediaType.getParameters().getOrDefault("charset", UTF_8.name());
+
         if (!UTF_8.name().equalsIgnoreCase(charset)) {
             log.debug("Request charset is not UTF-8 (%s), skipping query parsing", charset);
             return;
@@ -309,13 +329,24 @@ public class TrinoQueryProperties
             return preparedStatementsMapBuilder.build();
         }
         while (headers.hasMoreElements()) {
-            String[] preparedStatementsArray = headers.nextElement().split(",");
-            for (String preparedStatement : preparedStatementsArray) {
-                String[] nameValue = preparedStatement.split("=");
-                if (nameValue.length != 2) {
-                    throw new RequestParsingException(format("preparedStatement must be formatted as name=value, but is %s", preparedStatement));
+            for (String preparedStatement : HEADER_ENTRY_SPLITTER.split(headers.nextElement())) {
+                List<String> nameValue = HEADER_NAME_VALUE_SPLITTER.splitToList(preparedStatement);
+                if (nameValue.size() != 2) {
+                    throw new RequestParsingException("preparedStatement must be formatted as name=value, but is %s".formatted(preparedStatement));
                 }
-                preparedStatementsMapBuilder.put(URLDecoder.decode(nameValue[0], UTF_8), URLDecoder.decode(decodePreparedStatementFromHeader(nameValue[1]), UTF_8));
+                // The header value is URL encoded, so "$zstd:" arrives as "%24zstd%3A". Decoding must happen
+                // in this order, matching io.trino.server.HttpRequestSessionContextFactory, or the prefix never matches.
+                String name;
+                String value;
+                try {
+                    name = URLDecoder.decode(nameValue.getFirst(), UTF_8);
+                    value = URLDecoder.decode(nameValue.getLast(), UTF_8);
+                }
+                catch (IllegalArgumentException e) {
+                    // URLDecoder rejects incomplete or non-hexadecimal percent escapes
+                    throw new RequestParsingException("preparedStatement is not valid URL encoding", e);
+                }
+                preparedStatementsMapBuilder.put(name, decodePreparedStatementFromHeader(value));
             }
         }
         return preparedStatementsMapBuilder.build();
@@ -335,6 +366,7 @@ public class TrinoQueryProperties
     }
 
     private String decodePreparedStatementFromHeader(String headerValue)
+            throws RequestParsingException
     {
         // From io.trino.server.protocol.PreparedStatementEncoder
         String prefix = "$zstd:";
@@ -343,10 +375,38 @@ public class TrinoQueryProperties
         }
 
         String encoded = headerValue.substring(prefix.length());
-        byte[] compressed = base64Url().decode(encoded);
+        byte[] compressed;
+        long decompressedSize;
+        try {
+            compressed = base64Url().decode(encoded);
+            decompressedSize = decompressor.getDecompressedSize(compressed, 0, compressed.length);
+        }
+        catch (IllegalArgumentException | MalformedInputException e) {
+            throw new RequestParsingException("preparedStatement could not be decoded", e);
+        }
 
-        byte[] preparedStatement = new byte[toIntExact(decompressor.getDecompressedSize(compressed, 0, compressed.length))];
-        decompressor.decompress(compressed, 0, compressed.length, preparedStatement, 0, preparedStatement.length);
+        // A frame may omit the decompressed size, and then getDecompressedSize returns -1. Without it there is
+        // no budget to check before allocating, so reject instead of guessing. Trino and Kyuubi always write it.
+        if (decompressedSize < 0) {
+            throw new RequestParsingException("preparedStatement does not declare its decompressed size");
+        }
+        // The zstd frame header states the decompressed size, so a value small enough to fit in a header can
+        // ask for gigabytes. Check it before allocating. maxBodySize bounds the body in characters; UTF-8 uses
+        // at most 4 bytes per character, so the byte budget is 4x. Anything larger is past Trino's
+        // query.max-length anyway.
+        long maxDecompressedBytes = (long) maxBodySize * 4;
+        if (decompressedSize > maxDecompressedBytes) {
+            throw new RequestParsingException("preparedStatement decompresses to %s bytes, over the limit %s (maxBodySize %s)".formatted(decompressedSize, maxDecompressedBytes, maxBodySize));
+        }
+
+        byte[] preparedStatement = new byte[toIntExact(decompressedSize)];
+        try {
+            decompressor.decompress(compressed, 0, compressed.length, preparedStatement, 0, preparedStatement.length);
+        }
+        catch (IllegalArgumentException | MalformedInputException e) {
+            // The native decompressor reports a truncated frame as IllegalArgumentException, the Java one as MalformedInputException
+            throw new RequestParsingException("preparedStatement could not be decompressed", e);
+        }
         return new String(preparedStatement, UTF_8);
     }
 
@@ -444,6 +504,39 @@ public class TrinoQueryProperties
                 }
             }
             case TableFunctionInvocation s -> tableBuilder.add(qualifyName(s.getName()));
+            case TruncateTable s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case DropView s -> tableBuilder.add(qualifyName(s.getName()));
+            case DropMaterializedView s -> tableBuilder.add(qualifyName(s.getName()));
+            case MaterializedViewExecute s -> tableBuilder.add(qualifyName(s.getName()));
+            case RefreshMaterializedView s -> tableBuilder.add(qualifyName(s.getName()));
+            case RefreshView s -> tableBuilder.add(qualifyName(s.getName()));
+            // ALTER TABLE ... column operations: the modified table is what routing cares about
+            case DropColumn s -> tableBuilder.add(qualifyName(s.getTable()));
+            case RenameColumn s -> tableBuilder.add(qualifyName(s.getTable()));
+            case SetColumnType s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case SetDefaultValue s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case DropDefaultValue s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case DropNotNullConstraint s -> tableBuilder.add(qualifyName(s.getTable()));
+            // Branch DDL operates on a table
+            case CreateBranch s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case DropBranch s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case FastForwardBranch s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case ShowBranches s -> tableBuilder.add(qualifyName(s.getTableName()));
+            case Comment s -> {
+                if (s.getType() == Comment.Type.COLUMN) {
+                    // For a column comment the QualifiedName is the column path (...schema.table.column);
+                    // the table it belongs to is its prefix. The parser accepts a single-part column name,
+                    // which has no prefix, so there is nothing to extract (and getPrefix() avoids building
+                    // an empty QualifiedName, which would throw).
+                    Optional<QualifiedName> tableName = s.getName().getPrefix();
+                    if (tableName.isPresent()) {
+                        tableBuilder.add(qualifyName(tableName.get()));
+                    }
+                }
+                else {
+                    tableBuilder.add(qualifyName(s.getName()));
+                }
+            }
             default -> {}
         }
 
@@ -474,8 +567,7 @@ public class TrinoQueryProperties
         if (schemaOptional.isEmpty()) {
             schemaBuilder.add(defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier));
             catalogBuilder.add(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier));
-            catalogSchemaBuilder.add(format(
-                    "%s.%s",
+            catalogSchemaBuilder.add("%s.%s".formatted(
                     defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier),
                     defaultSchema.orElseThrow(this::unsetDefaultExceptionSupplier)));
         }
@@ -485,12 +577,12 @@ public class TrinoQueryProperties
                 case 1 -> {
                     schemaBuilder.add(schema.getParts().getFirst());
                     catalogBuilder.add(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier));
-                    catalogSchemaBuilder.add(format("%s.%s", defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), schema.getParts().getFirst()));
+                    catalogSchemaBuilder.add("%s.%s".formatted(defaultCatalog.orElseThrow(this::unsetDefaultExceptionSupplier), schema.getParts().getFirst()));
                 }
                 case 2 -> {
                     schemaBuilder.add(schema.getParts().get(1));
                     catalogBuilder.add(schema.getParts().getFirst());
-                    catalogSchemaBuilder.add(format("%s.%s", schema.getParts().getFirst(), schema.getParts().getLast()));
+                    catalogSchemaBuilder.add("%s.%s".formatted(schema.getParts().getFirst(), schema.getParts().getLast()));
                 }
                 default -> log.error("Schema has >2 parts: %s", schema);
             }
@@ -557,7 +649,7 @@ public class TrinoQueryProperties
                 if (!inQuotes) {
                     if (i != start) {
                         log.error("Illegal position for first quote character in table name: %s", name);
-                        throw new ParsingException(format("Illegal position for first quote character in table name: %s", name), new NodeLocation(1, i));
+                        throw new ParsingException("Illegal position for first quote character in table name: %s".formatted(name), new NodeLocation(1, i));
                     }
                     start = start + 1;
                     partQuoted = true;
@@ -692,6 +784,11 @@ public class TrinoQueryProperties
         public RequestParsingException(String message)
         {
             super(message);
+        }
+
+        public RequestParsingException(String message, Throwable cause)
+        {
+            super(message, cause);
         }
     }
 

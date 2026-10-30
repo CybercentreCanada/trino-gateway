@@ -18,7 +18,7 @@ import io.trino.gateway.ha.config.DataStoreConfiguration;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateResult;
 
-import static java.lang.String.format;
+import java.util.Locale;
 
 public class FlywayMigration
 {
@@ -28,16 +28,7 @@ public class FlywayMigration
 
     private static String getLocation(String configDbUrl)
     {
-        if (configDbUrl.startsWith("jdbc:postgresql")) {
-            return "postgresql";
-        }
-        if (configDbUrl.startsWith("jdbc:mysql")) {
-            return "mysql";
-        }
-        if (configDbUrl.startsWith("jdbc:oracle")) {
-            return "oracle";
-        }
-        throw new IllegalArgumentException(format("Invalid JDBC URL: %s. Only PostgreSQL, MySQL, and Oracle are supported.", configDbUrl));
+        return JdbcUrlDialect.forJdbcUrl(configDbUrl).name().toLowerCase(Locale.ROOT);
     }
 
     public static void migrate(DataStoreConfiguration config)
@@ -53,6 +44,10 @@ public class FlywayMigration
                 .baselineOnMigrate(true)
                 .baselineVersion("0")
                 .load();
+        // V1 was changed after release to stop creating the resource group tables, so databases
+        // created by Trino Gateway 18 or older recorded a different checksum. Repair updates the
+        // recorded checksums instead of failing validation, and never re-runs an applied migration.
+        // Do not change a released migration again, add a new one instead.
         flyway.repair();
         MigrateResult migrations = flyway.migrate();
         log.info("Performed %s migrations", migrations.migrationsExecuted);

@@ -30,16 +30,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 public class HaQueryHistoryManager
         implements QueryHistoryManager
 {
     private static final int FIRST_PAGE_NO = 1;
+    private static final String TRUNCATION_MARKER = "\n-- [truncated by trino-gateway: %d of %d chars]";
 
     private final QueryHistoryDao dao;
     private final boolean isOracleBackend;
     private final boolean queryHistoryEnabled;
+    private final Integer maxQueryTextLength;
 
     @Inject
     public HaQueryHistoryManager(Jdbi jdbi, DataStoreConfiguration configuration)
@@ -47,6 +50,8 @@ public class HaQueryHistoryManager
         dao = requireNonNull(jdbi, "jdbi is null").onDemand(QueryHistoryDao.class);
         this.isOracleBackend = configuration.getJdbcUrl().startsWith("jdbc:oracle");
         queryHistoryEnabled = configuration.isQueryHistoryEnabled();
+        maxQueryTextLength = configuration.getQueryHistoryMaxQueryTextLength();
+        checkArgument(maxQueryTextLength == null || maxQueryTextLength > 0, "queryHistoryMaxQueryTextLength must be greater than 0");
     }
 
     @Override
@@ -63,13 +68,26 @@ public class HaQueryHistoryManager
 
         dao.insertHistory(
                 queryDetail.getQueryId(),
-                queryDetail.getQueryText(),
+                truncateQueryText(queryDetail.getQueryText()),
                 queryDetail.getBackendUrl(),
                 queryDetail.getUser(),
                 queryDetail.getSource(),
                 queryDetail.getCaptureTime(),
                 queryDetail.getRoutingGroup(),
                 queryDetail.getExternalUrl());
+    }
+
+    private String truncateQueryText(String queryText)
+    {
+        if (queryText == null || maxQueryTextLength == null || queryText.length() <= maxQueryTextLength) {
+            return queryText;
+        }
+        int end = maxQueryTextLength;
+        // Do not split a surrogate pair
+        if (Character.isHighSurrogate(queryText.charAt(end - 1))) {
+            end--;
+        }
+        return queryText.substring(0, end) + TRUNCATION_MARKER.formatted(end, queryText.length());
     }
 
     @Override
@@ -125,22 +143,13 @@ public class HaQueryHistoryManager
     public TableData<QueryDetail> findQueryHistory(QueryHistoryRequest query)
     {
         int start = getStart(query.page(), query.size());
-        String condition = "";
-        if (!Strings.isNullOrEmpty(query.user())) {
-            condition += " and user_name = '" + query.user() + "'";
-        }
-        if (!Strings.isNullOrEmpty(query.externalUrl())) {
-            condition += " and external_url = '" + query.externalUrl() + "'";
-        }
-        if (!Strings.isNullOrEmpty(query.queryId())) {
-            condition += " and query_id = '" + query.queryId() + "'";
-        }
-        if (!Strings.isNullOrEmpty(query.source())) {
-            condition += " and source = '" + query.source() + "'";
-        }
-        List<QueryHistory> histories = dao.pageQueryHistory(condition, query.size(), start);
+        String userName = Strings.emptyToNull(query.user());
+        String externalUrl = Strings.emptyToNull(query.externalUrl());
+        String queryId = Strings.emptyToNull(query.queryId());
+        String source = Strings.emptyToNull(query.source());
+        List<QueryHistory> histories = dao.pageQueryHistory(userName, externalUrl, queryId, source, query.size(), start, isOracleBackend);
         List<QueryDetail> rows = upcast(histories);
-        Long total = dao.count(condition);
+        Long total = dao.count(userName, externalUrl, queryId, source);
         return TableData.build(rows, total);
     }
 

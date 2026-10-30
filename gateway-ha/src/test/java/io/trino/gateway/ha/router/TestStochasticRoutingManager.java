@@ -19,27 +19,37 @@ import io.trino.gateway.ha.config.DatabaseCacheConfiguration;
 import io.trino.gateway.ha.config.ProxyBackendConfiguration;
 import io.trino.gateway.ha.config.RoutingConfiguration;
 import io.trino.gateway.ha.persistence.JdbcConnectionManager;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import static io.trino.gateway.ha.TestingJdbcConnectionManager.createTestingJdbcConnectionManager;
+import static io.trino.gateway.ha.TestingJdbcConnectionManager.createTestingPostgresContainer;
 import static io.trino.gateway.ha.TestingJdbcConnectionManager.dataStoreConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @TestInstance(Lifecycle.PER_CLASS)
 final class TestStochasticRoutingManager
 {
+    private final PostgreSQLContainer postgres = createTestingPostgresContainer();
+
     RoutingManager haRoutingManager;
     GatewayBackendManager backendManager;
     QueryHistoryManager historyManager;
 
+    @AfterAll
+    public final void close()
+    {
+        postgres.close();
+    }
+
     @BeforeAll
     void setUp()
     {
-        DataStoreConfiguration dataStoreConfig = dataStoreConfig();
-        JdbcConnectionManager connectionManager = createTestingJdbcConnectionManager(dataStoreConfig);
+        DataStoreConfiguration dataStoreConfig = dataStoreConfig(postgres);
+        JdbcConnectionManager connectionManager = new JdbcConnectionManager(dataStoreConfig);
         RoutingConfiguration routingConfiguration = new RoutingConfiguration();
         backendManager = new HaGatewayManager(connectionManager.getJdbi(), routingConfiguration, new DatabaseCacheConfiguration());
         historyManager = new HaQueryHistoryManager(connectionManager.getJdbi(), dataStoreConfig);
@@ -75,5 +85,50 @@ final class TestStochasticRoutingManager
 
         assertThat(haRoutingManager.provideBackendConfiguration(groupName, "").getProxyTo())
                 .isEqualTo("test_group0.trino.example.com");
+    }
+
+    @Test
+    void testIsBackendActive()
+    {
+        ProxyBackendConfiguration active = oauthBackend("oauth-active", "http://oauth-active:8080", true);
+        // Not checked yet, as on a freshly started instance
+        assertThat(haRoutingManager.isBackendActive("http://oauth-active:8080")).isTrue();
+        // The health status does not matter
+        for (TrinoStatus status : TrinoStatus.values()) {
+            haRoutingManager.updateBackEndHealth(active.getName(), status);
+            assertThat(haRoutingManager.isBackendActive("http://oauth-active:8080")).isTrue();
+        }
+
+        ProxyBackendConfiguration deactivated = oauthBackend("oauth-deactivated", "http://oauth-deactivated:8080", false);
+        haRoutingManager.updateBackEndHealth(deactivated.getName(), TrinoStatus.HEALTHY);
+        assertThat(haRoutingManager.isBackendActive("http://oauth-deactivated:8080")).isFalse();
+
+        // Unknown backend
+        assertThat(haRoutingManager.isBackendActive("http://oauth-does-not-exist:8080")).isFalse();
+
+        // A proxyTo carrying a base path still matches its scheme://authority pin
+        oauthBackend("oauth-path", "http://oauth-path:8080/gateway", true);
+        assertThat(haRoutingManager.isBackendActive("http://oauth-path:8080")).isTrue();
+
+        // Host comparison is case-insensitive
+        oauthBackend("oauth-mixed", "http://OAuth-Mixed:8080", true);
+        assertThat(haRoutingManager.isBackendActive("http://oauth-mixed:8080")).isTrue();
+
+        // Any active backend with the address counts, even if an inactive one shares it
+        oauthBackend("oauth-shared-inactive", "http://oauth-shared:8080", false);
+        oauthBackend("oauth-shared-active", "http://oauth-shared:8080", true);
+        assertThat(haRoutingManager.isBackendActive("http://oauth-shared:8080")).isTrue();
+    }
+
+    private ProxyBackendConfiguration oauthBackend(String name, String proxyTo, boolean active)
+    {
+        ProxyBackendConfiguration backend = new ProxyBackendConfiguration();
+        backend.setActive(active);
+        backend.setRoutingGroup("oauth-group");
+        backend.setName(name);
+        backend.setProxyTo(proxyTo);
+        backend.setExternalUrl("https://ext.example");
+        backendManager.addBackend(backend);
+        return backend;
     }
 }
