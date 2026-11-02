@@ -21,11 +21,14 @@ import io.trino.gateway.ha.config.ProxyBackendConfiguration;
 import io.trino.gateway.ha.handler.schema.RoutingDestination;
 import io.trino.gateway.ha.handler.schema.RoutingTargetResponse;
 import io.trino.gateway.ha.router.GatewayCookie;
+import io.trino.gateway.ha.router.OAuth2RoutingStore;
+import io.trino.gateway.ha.router.OAuth2RoutingUtils;
 import io.trino.gateway.ha.router.RoutingGroupSelector;
 import io.trino.gateway.ha.router.RoutingManager;
 import io.trino.gateway.ha.router.schema.RoutingSelectorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
+import jakarta.ws.rs.WebApplicationException;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -45,26 +48,31 @@ public class RoutingTargetHandler
 {
     private static final Logger log = Logger.get(RoutingTargetHandler.class);
     private final RoutingManager routingManager;
+    private final OAuth2RoutingStore oauth2RoutingStore;
     private final RoutingGroupSelector routingGroupSelector;
     private final String defaultRoutingGroup;
     private final List<String> statementPaths;
     private final boolean requestAnalyserClientsUseV2Format;
     private final int requestAnalyserMaxBodySize;
     private final boolean cookiesEnabled;
+    private final boolean oauth2RoutingEnabled;
 
     @Inject
     public RoutingTargetHandler(
             RoutingManager routingManager,
+            OAuth2RoutingStore oauth2RoutingStore,
             RoutingGroupSelector routingGroupSelector,
             HaGatewayConfiguration haGatewayConfiguration)
     {
         this.routingManager = requireNonNull(routingManager);
+        this.oauth2RoutingStore = requireNonNull(oauth2RoutingStore);
         this.routingGroupSelector = requireNonNull(routingGroupSelector);
         this.defaultRoutingGroup = haGatewayConfiguration.getRouting().getDefaultRoutingGroup();
         statementPaths = requireNonNull(haGatewayConfiguration.getStatementPaths());
         requestAnalyserClientsUseV2Format = haGatewayConfiguration.getRequestAnalyzerConfig().isClientsUseV2Format();
         requestAnalyserMaxBodySize = haGatewayConfiguration.getRequestAnalyzerConfig().getMaxBodySize();
         cookiesEnabled = GatewayCookieConfigurationPropertiesProvider.getInstance().isEnabled();
+        oauth2RoutingEnabled = haGatewayConfiguration.getRouting().isOauth2RoutingEnabled();
     }
 
     public RoutingTargetResponse resolveRouting(HttpServletRequest request)
@@ -135,7 +143,7 @@ public class RoutingTargetHandler
         public Enumeration<String> getHeaders(String name)
         {
             if (customHeaders.containsKey(name)) {
-                return Collections.enumeration(Collections.singletonList(customHeaders.get(name)));
+                return Collections.enumeration(List.of(customHeaders.get(name)));
             }
             return super.getHeaders(name);
         }
@@ -152,6 +160,12 @@ public class RoutingTargetHandler
 
     private Optional<String> getPreviousCluster(Optional<String> queryId, HttpServletRequest request)
     {
+        if (oauth2RoutingEnabled) {
+            Optional<String> oauthBackend = getOAuth2StickyBackend(request);
+            if (oauthBackend.isPresent()) {
+                return oauthBackend;
+            }
+        }
         if (queryId.isPresent()) {
             return queryId.map(routingManager::findBackendForQueryId);
         }
@@ -171,14 +185,76 @@ public class RoutingTargetHandler
         return Optional.empty();
     }
 
+    /**
+     * Pins an in-flight Trino OAuth2 token-exchange request to the coordinator that minted its
+     * {@code authId}. Covers all three gateway legs of the handshake — the driver poll, the browser
+     * initiate, and the browser callback (keyed by the {@code authIdHash} inside its {@code state}).
+     * Returns:
+     * <ul>
+     *   <li>a present backend: route the request there (the pinned coordinator is active, whatever
+     *       its health status in this instance's view);</li>
+     *   <li>empty: not a pinnable token-exchange request, or no pin recorded yet on this gateway
+     *       (fall through to normal routing; the 401 challenge handler records the pin).</li>
+     * </ul>
+     * If the pinned coordinator is deactivated or removed from the fleet (see
+     * {@link RoutingManager#isBackendActive}), the pin is dropped and the client is forced to
+     * re-authenticate, since only the minting coordinator holds the exchange state.
+     */
+    private Optional<String> getOAuth2StickyBackend(HttpServletRequest request)
+    {
+        String pinKey = oauth2PinKey(request).orElse(null);
+        if (pinKey == null) {
+            return Optional.empty();
+        }
+        String pinnedBackend = oauth2RoutingStore.findBackend(pinKey).orElse(null);
+        if (pinnedBackend == null) {
+            return Optional.empty();
+        }
+        if (routingManager.isBackendActive(pinnedBackend)) {
+            // Only the minting coordinator can finish the handshake, so route there whatever this
+            // instance's health view says
+            return Optional.of(pinnedBackend);
+        }
+        oauth2RoutingStore.removeBackend(pinKey);
+        log.warn("OAuth2 pinned backend [%s] is no longer active for [%s]; forcing re-auth",
+                pinnedBackend,
+                OAuth2RoutingUtils.redactForLog(request.getRequestURI(), request.getQueryString()));
+        throw new WebApplicationException(OAuth2RoutingUtils.forceReAuthResponse(request.getRequestURI()));
+    }
+
+    /**
+     * The pin-store lookup key for an in-flight token-exchange request: from the path for the driver
+     * poll ({@code /oauth2/token/{authId}}) and the browser initiate
+     * ({@code /oauth2/token/initiate/{authIdHash}}), or from the {@code state} parameter for the
+     * browser callback ({@code /oauth2/callback}). Empty for anything else.
+     */
+    private Optional<String> oauth2PinKey(HttpServletRequest request)
+    {
+        String path = request.getRequestURI();
+        Optional<String> callbackKey = OAuth2RoutingUtils.pinKeyFromCallback(path, request.getQueryString());
+        if (callbackKey.isPresent()) {
+            return callbackKey;
+        }
+        return OAuth2RoutingUtils.pinKeyFromRequestPath(path);
+    }
+
     private void logRewrite(String newBackend, HttpServletRequest request)
     {
-        log.info("Rerouting [%s://%s:%s%s%s]--> [%s]",
+        log.info("Rerouting [%s://%s:%s%s]--> [%s]",
                 request.getScheme(),
                 request.getRemoteHost(),
                 request.getServerPort(),
-                request.getRequestURI(),
-                (request.getQueryString() != null ? "?" + request.getQueryString() : ""),
-                buildUriWithNewCluster(newBackend, request));
+                OAuth2RoutingUtils.redactForLog(request.getRequestURI(), request.getQueryString()),
+                redactedRewriteTarget(newBackend, request));
+    }
+
+    /**
+     * The rewrite target for the reroute log line: {@code newBackend} plus the redacted path/query.
+     * Unlike {@link ProxyUtils#buildUriWithNewCluster}, it must not carry the real {@code authId},
+     * {@code authIdHash} or {@code state}, because a log reader could lift the handshake id from it.
+     */
+    static String redactedRewriteTarget(String newBackend, HttpServletRequest request)
+    {
+        return newBackend + OAuth2RoutingUtils.redactForLog(request.getRequestURI(), request.getQueryString());
     }
 }

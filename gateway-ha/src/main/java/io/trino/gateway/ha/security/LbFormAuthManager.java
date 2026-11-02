@@ -26,7 +26,6 @@ import io.trino.gateway.ha.domain.Result;
 import io.trino.gateway.ha.domain.request.RestLoginRequest;
 import io.trino.gateway.ha.security.util.BasicCredentials;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -105,7 +104,7 @@ public class LbFormAuthManager
         try {
             DecodedJWT jwt = JWT.decode(idToken);
 
-            if (LbTokenUtil.validateToken(idToken, lbKeyProvider.getRsaPublicKey(), jwt.getIssuer(), Optional.empty())) {
+            if (LbTokenUtil.validateToken(idToken, lbKeyProvider.publicKey(), jwt.getIssuer(), Optional.empty())) {
                 return Optional.of(jwt.getClaims());
             }
         }
@@ -120,11 +119,9 @@ public class LbFormAuthManager
         String token = "";
 
         try {
-            Algorithm algorithm = Algorithm.RSA256(
-                    lbKeyProvider.getRsaPublicKey(),
-                    lbKeyProvider.getRsaPrivateKey());
+            Algorithm algorithm = lbKeyProvider.signingAlgorithm();
 
-            Map<String, Object> headers = Map.of("alg", "RS256");
+            Map<String, Object> headers = Map.of("alg", lbKeyProvider.jwtAlgorithmName());
 
             token = JWT.create()
                     .withHeader(headers)
@@ -163,7 +160,7 @@ public class LbFormAuthManager
         for (String role : roles) {
             String value = pagePermissions.get(role);
             if (value == null) {
-                return Collections.emptyList();
+                return List.of();
             }
         }
         return roles.stream()

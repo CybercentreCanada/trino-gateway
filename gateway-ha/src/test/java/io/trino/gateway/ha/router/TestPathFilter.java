@@ -25,6 +25,7 @@ import static io.trino.gateway.ha.handler.HttpUtils.UI_API_STATS_PATH;
 import static io.trino.gateway.ha.handler.HttpUtils.V1_INFO_PATH;
 import static io.trino.gateway.ha.handler.HttpUtils.V1_NODE_PATH;
 import static io.trino.gateway.ha.handler.HttpUtils.V1_QUERY_PATH;
+import static io.trino.gateway.ha.handler.HttpUtils.V1_SPOOLED_PATH;
 import static io.trino.gateway.ha.handler.HttpUtils.V1_STATEMENT_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -99,6 +100,89 @@ class TestPathFilter
     }
 
     @Test
+    void testSpooledPaths()
+    {
+        // Spooled segment paths must be forwarded to the backend coordinator.
+        assertThat(pathFilter.isPathWhiteListed(V1_SPOOLED_PATH)).isTrue();
+        assertThat(pathFilter.isPathWhiteListed(V1_SPOOLED_PATH + "/ack/k57HZQqycuX7B_5QQnFtvR9yZ6zxt-SyPySruC9HMHI=")).isTrue();
+        assertThat(pathFilter.isPathWhiteListed(V1_SPOOLED_PATH + "/download/BknNfrjG9rI6GsNoAlSOKB9yZ6zxt-SyPySruC9HMHI=")).isTrue();
+    }
+
+    @Test
+    void testQueryProtocolPathsRequireAuthentication()
+    {
+        assertThat(pathFilter.requiresBackendAuthentication(V1_STATEMENT_PATH)).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_STATEMENT_PATH + "/executing")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication("/v2/statement/query456")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_QUERY_PATH)).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_QUERY_PATH + "/query123")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_SPOOLED_PATH)).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_SPOOLED_PATH + "/download/token")).isTrue();
+    }
+
+    @Test
+    void testBrowserAndHealthEndpointsAreExempt()
+    {
+        assertThat(pathFilter.requiresBackendAuthentication(TRINO_UI_PATH)).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication(TRINO_UI_PATH + "/query.html")).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication(UI_API_STATS_PATH)).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication(OAUTH_PATH + "/callback")).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_INFO_PATH)).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_NODE_PATH)).isFalse();
+    }
+
+    @Test
+    void testAuthenticationFailsClosedOnEverythingElseThatIsRouted()
+    {
+        // sibling paths the whitelist matches by prefix are still forwarded to a backend
+        assertThat(pathFilter.isPathWhiteListed(V1_QUERY_PATH + "-extra")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_QUERY_PATH + "-extra")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_SPOOLED_PATH + "x")).isTrue();
+
+        // extraWhitelistPaths too
+        assertThat(pathFilter.isPathWhiteListed("/api/v1/custom/thing")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication("/api/v1/custom/thing")).isTrue();
+
+        // and near-misses of an exempt prefix
+        assertThat(pathFilter.requiresBackendAuthentication(TRINO_UI_PATH + "x")).isTrue();
+    }
+
+    @Test
+    void testAuthenticationDecisionIsTakenOnANormalizedPath()
+    {
+        // matrix parameters are ignored by JAX-RS resource matching
+        assertThat(pathFilter.requiresBackendAuthentication(V1_STATEMENT_PATH + ";a=b")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_STATEMENT_PATH + ";a=b/executing/q/slug/1")).isTrue();
+
+        // dot segments must not buy an exemption
+        assertThat(pathFilter.requiresBackendAuthentication(V1_INFO_PATH + "/../statement")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(TRINO_UI_PATH + "/./../v1/statement")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_INFO_PATH + "/%2e%2e/statement")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_INFO_PATH + "/%2E%2E/statement")).isTrue();
+        assertThat(pathFilter.requiresBackendAuthentication(V1_INFO_PATH + "%2f..%2fstatement")).isTrue();
+
+        // exempt paths stay exempt through the same normalization
+        assertThat(pathFilter.requiresBackendAuthentication(TRINO_UI_PATH + ";a=b/query.html")).isFalse();
+        assertThat(pathFilter.requiresBackendAuthentication("//ui//query.html")).isFalse();
+    }
+
+    @Test
+    void testNormalize()
+    {
+        assertThat(PathFilter.normalize("/v1/statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/statement;a=b")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/statement;a=b/queued/q/slug/1")).isEqualTo("/v1/statement/queued/q/slug/1");
+        assertThat(PathFilter.normalize("/v1/info/../statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/info/%2e%2e/statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/info/%2E%2E/statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/info%2f..%2fstatement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/v1/./statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("//v1//statement")).isEqualTo("/v1/statement");
+        assertThat(PathFilter.normalize("/..")).isEqualTo("/");
+        assertThat(PathFilter.normalize("/")).isEqualTo("/");
+    }
+
+    @Test
     void testNonWhitelistedPaths()
     {
         assertThat(pathFilter.isPathWhiteListed("/v3/statement")).isFalse(); // Not in our statement paths
@@ -145,6 +229,8 @@ class TestPathFilter
 
         // Should still allow hardcoded paths
         assertThat(emptyFilter.isPathWhiteListed(V1_QUERY_PATH)).isTrue();
+        assertThat(emptyFilter.isPathWhiteListed(V1_SPOOLED_PATH + "/ack/sometoken")).isTrue();
+        assertThat(emptyFilter.isPathWhiteListed(V1_SPOOLED_PATH + "/download/sometoken")).isTrue();
         assertThat(emptyFilter.isPathWhiteListed(TRINO_UI_PATH)).isTrue();
         assertThat(emptyFilter.isPathWhiteListed(V1_INFO_PATH)).isTrue();
         assertThat(emptyFilter.isPathWhiteListed(OAUTH_PATH)).isTrue();
@@ -199,6 +285,8 @@ class TestPathFilter
         assertThat(filter.isPathWhiteListed(V1_STATEMENT_PATH + "/executing")).isTrue();
         assertThat(filter.isPathWhiteListed(V1_STATEMENT_PATH + "/queued")).isTrue();
         assertThat(filter.isPathWhiteListed(V1_QUERY_PATH)).isTrue();
+        assertThat(filter.isPathWhiteListed(V1_SPOOLED_PATH + "/ack/k57HZQqycuX7B_5QQnFtvR9yZ6zxt-SyPySruC9HMHI=")).isTrue();
+        assertThat(filter.isPathWhiteListed(V1_SPOOLED_PATH + "/download/BknNfrjG9rI6GsNoAlSOKB9yZ6zxt-SyPySruC9HMHI=")).isTrue();
         assertThat(filter.isPathWhiteListed(TRINO_UI_PATH)).isTrue();
         assertThat(filter.isPathWhiteListed(OAUTH_PATH)).isTrue();
 

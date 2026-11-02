@@ -43,7 +43,6 @@ import jakarta.ws.rs.core.Response;
 import java.io.IOException;
 import java.net.URI;
 import java.security.interfaces.RSAPublicKey;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -192,7 +191,7 @@ public class LbOAuthManager
         for (String role : roles) {
             String value = pagePermissions.get(role);
             if (value == null) {
-                return Collections.emptyList();
+                return List.of();
             }
         }
         return roles.stream()

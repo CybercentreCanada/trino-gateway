@@ -50,10 +50,35 @@ The files are also included in the JAR file.
 
 If you do not want migrations to be performed automatically on startup, then
 you can set `runMigrationsEnabled` to `false` in the data store configuration.
+Migrations are activated by default, and deactivating them is rarely necessary.
+With migrations deactivated, you must apply any new migration files to the
+database manually before each upgrade of Trino Gateway.
 
 You can also disable query history recording to the database by setting
 `queryHistoryEnabled` to `false`. This can be useful in scenarios where you
 want to reduce database load or don't need query history tracking.
+
+To limit the size of each query history record, set
+`queryHistoryMaxQueryTextLength` to the maximum number of characters of query
+text to store. Longer query text is truncated and a
+`-- [truncated by trino-gateway: N of M chars]` comment is appended, so the
+stored value can be slightly longer than the configured limit. By default, the
+full query text is stored.
+
+If `maxPoolSize` is configured and greater than 0, Trino Gateway uses a
+connection pool for data store connections, including Trino Gateway metadata,
+query history, and the pins for
+[OAuth2 token-exchange routing](#configure-oauth2-token-exchange-routing).
+If `maxPoolSize` is not configured, Trino Gateway creates a new JDBC connection
+per request.
+A value of `10` is a reasonable starting point for many deployments, but the
+optimal value depends on the database capacity and expected concurrency.
+The optional `keepaliveTime` and `maxLifetime` settings control how frequently
+idle pooled connections are checked and how long a pooled connection can be
+reused. Both accept Airlift-style durations such as `2m` or `30m`. If they are
+not configured, the connection pool defaults are used. A non-zero value below
+`30s`, or a `keepaliveTime` that is not less than `maxLifetime`, is not applied:
+the setting is reset to its default or disabled and a warning is logged.
 
 For example:
 
@@ -64,9 +89,33 @@ dataStore:
   password: PASSWORD
   driver: org.postgresql.Driver
   queryHistoryHoursRetention: 24
-  runMigrationsEnabled: false
   queryHistoryEnabled: true  # Set to false to disable query history recording
+  queryHistoryMaxQueryTextLength: 10000  # Optional: truncate stored query text
+  maxPoolSize: 10            # Optional: enables JDBC connection pooling for the data store
+  keepaliveTime: 2m          # Optional: interval for checking idle pooled connections
+  maxLifetime: 30m           # Optional: maximum lifetime of a pooled connection
 ```
+
+Keep the pool small. Trino Gateway uses the data store for backend metadata,
+query history, and periodic cleanup. Each query submitted through Trino Gateway
+inserts a query history record while the request is proxied, so the pool must
+keep up with the query submission rate. Each insert is short, so a large pool is
+rarely beneficial. HikariCP recommends a fixed-size pool sized roughly as
+`(cpu_cores * 2) + effective_spindles` for the Trino Gateway host, and the
+default of `10` suits most deployments. Never set `maxPoolSize` higher
+than what the database allows across all Trino Gateway instances, such as
+PostgreSQL or MySQL `max_connections`, or the Oracle `sessions` and `processes`
+limits. At high scale, an external pooler such as PgBouncer is often a better
+fit than a large pool.
+
+Set `maxLifetime` a few seconds shorter than the shortest connection lifetime
+enforced by the database or infrastructure, such as a load balancer idle timeout
+or the MySQL `wait_timeout`. Keep `keepaliveTime` shorter than `maxLifetime`.
+
+For the rationale and the full set of pool tuning options, see the HikariCP
+documentation on [pool
+sizing](https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing) and
+[configuration](https://github.com/brettwooldridge/HikariCP#gear-configuration-knobs-baby).
 
 `Flyway` uses a transactional lock in databases that support it such as 
 [PostgreSQL](https://documentation.red-gate.com/fd/postgresql-database-235241807.html#).
@@ -158,6 +207,83 @@ dataStore:
 ### Configure routing rules
 
 Find more information in the [routing rules documentation](routing-rules.md).
+
+### Configure OAuth2 token-exchange routing
+
+Trino's OAuth2 token-exchange handshake spans two HTTP clients that share only
+an `authId`: the driver/CLI poll loop (`GET /oauth2/token/{authId}`) and the
+browser (`GET /oauth2/token/initiate/{authIdHash}`, returning from the identity
+provider to `GET /oauth2/callback`). Only the coordinator that issued the
+original `401` challenge holds the in-memory exchange state for that `authId`,
+so in a multi-coordinator deployment normal routing can send these requests to
+a different backend and stall the login. This is separate from the existing
+cookie-based browser routing (see
+[Routing logic](routing-logic.md#routing-based-on-cookies)), which cannot help
+on its own since the driver and browser are different HTTP clients.
+
+Enable pinning of OAuth2 token-exchange requests to the coordinator that
+minted the `authId` with:
+
+```yaml
+routing:
+  oauth2RoutingEnabled: true   # default false
+```
+
+Pins are recorded in the `oauth2_routing` table so they are shared across
+gateway instances. Each pin is keyed by `pin_key`, a hash of the handshake id.
+The table is created by the [database migrations](#backend-database). If
+migrations are deactivated with `runMigrationsEnabled` set to `false` and the
+table does not exist, pins cannot be persisted and OAuth2 routing silently falls
+back to normal routing.
+
+A pin is dropped, and the client is forced to re-authenticate, only when its
+coordinator is deactivated or removed. Otherwise the request goes to the pinned
+coordinator whatever its health status, since no other coordinator can finish
+the handshake. If that coordinator is down, the request fails with `502` and the
+pin is removed after the retention period. The Trino CLI and JDBC driver retry a
+`502` while they poll for the token, so they wait until their external
+authentication timeout, 2 minutes by default. A new login gets a new handshake
+id and is not affected.
+
+Pins are written on `401` responses to unauthenticated requests, so writes are
+rate-limited per gateway instance. Over the limit, the pin is not written, the
+rest of that handshake is routed normally and may fail, and the
+`PinWriteRateLimited` counter of the
+`io.trino.gateway.ha.router:name=OAuth2RoutingStats` JMX bean is incremented.
+The limit is shared by all clients of the instance, so a flood of
+unauthenticated requests above it also stops real logins from being pinned. To
+avoid that, raise the limit or rate-limit anonymous traffic in front of the
+gateway. Adjust the limit with:
+
+```yaml
+routing:
+  oauth2RoutingMaxPinWritesPerSecond: 2000
+```
+
+The limit is an average, so an instance that was idle can briefly write up to
+about twice as many pins in one second.
+
+Stored pins are retained for 20 minutes by default and are removed by a sweep
+that runs every 5 minutes. Keep the retention above the coordinators'
+`http-server.authentication.oauth2.challenge-timeout` (15 minutes by default),
+so a pin is not removed while its handshake can still complete. Trino Gateway
+logs a warning if the retention is 15 minutes or less:
+
+```yaml
+dataStore:
+  oauth2RoutingRetention: "20m"    # e.g. "30m", "1h"
+```
+
+The sweep only runs while `oauth2RoutingEnabled` is set. If you turn OAuth2
+routing off, remove the remaining pins with `DELETE FROM oauth2_routing`.
+
+Trino Gateway keeps the handshake ids out of its own log lines, but the
+[HTTP request log](https://trino.io/docs/current/admin/properties-logging.html#http-server-log-enabled)
+(`http-server.log.enabled`, on by default) records the raw path and query of
+every request, including the `authId`, the `authIdHash`, and the callback's
+`code` and `state`. Anyone who can read that log while a login is in progress
+can take it over, so restrict access to the log or disable it when OAuth2
+routing is enabled.
 
 ### Configure logging <a name="logging">
 

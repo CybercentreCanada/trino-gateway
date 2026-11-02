@@ -18,9 +18,18 @@ import io.trino.gateway.ha.clustermonitor.TrinoStatus;
 import io.trino.gateway.ha.config.ProxyBackendConfiguration;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface RoutingManager
 {
+    /**
+     * Returns the current health status of a backend cluster.
+     *
+     * @param backendId the unique identifier of the backend cluster
+     * @return the health status, or empty if the backend is not tracked
+     */
+    Optional<TrinoStatus> getBackEndHealth(String backendId);
+
     /**
      * Updates the health status of a backend cluster.
      *
@@ -28,6 +37,13 @@ public interface RoutingManager
      * @param value the health status of the backend (UP, DOWN, etc.)
      */
     void updateBackEndHealth(String backendId, TrinoStatus value);
+
+    /**
+     * Removes a backend cluster from health tracking entirely.
+     *
+     * @param backendId the unique identifier of the backend cluster to remove
+     */
+    void removeBackEndHealth(String backendId);
 
     /**
      * Updates the statistics for all backend clusters.
@@ -92,4 +108,15 @@ public interface RoutingManager
      * @return the backend configuration for the selected cluster
      */
     ProxyBackendConfiguration provideBackendConfiguration(String routingGroup, String user);
+
+    /**
+     * Whether {@code backendUrl} maps to an active backend, whatever its health status. Matching is by
+     * scheme and authority (host/port) only and is case-insensitive, so a proxy-to URL that carries a
+     * base path or differs in host case still resolves to its backend (e.g. an OAuth2 pin, which is a
+     * bare {@code scheme://authority}).
+     *
+     * @param backendUrl the backend URL to resolve
+     * @return true if an active backend has the same scheme and authority
+     */
+    boolean isBackendActive(String backendUrl);
 }

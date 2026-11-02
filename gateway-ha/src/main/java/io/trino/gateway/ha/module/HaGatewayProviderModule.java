@@ -18,7 +18,9 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.google.inject.Singleton;
 import com.google.inject.multibindings.Multibinder;
+import com.google.inject.multibindings.OptionalBinder;
 import io.airlift.http.client.HttpClient;
+import io.airlift.http.server.HttpServer;
 import io.airlift.log.Logger;
 import io.trino.gateway.ha.clustermonitor.ActiveClusterMonitor;
 import io.trino.gateway.ha.clustermonitor.ClusterStatsHttpMonitor;
@@ -35,25 +37,27 @@ import io.trino.gateway.ha.clustermonitor.TrinoClusterStatsObserver;
 import io.trino.gateway.ha.config.AuthenticationConfiguration;
 import io.trino.gateway.ha.config.AuthorizationConfiguration;
 import io.trino.gateway.ha.config.ClusterStatsConfiguration;
-import io.trino.gateway.ha.config.DataStoreConfiguration;
 import io.trino.gateway.ha.config.GatewayCookieConfigurationPropertiesProvider;
 import io.trino.gateway.ha.config.HaGatewayConfiguration;
 import io.trino.gateway.ha.config.OAuth2GatewayCookieConfigurationPropertiesProvider;
 import io.trino.gateway.ha.config.RoutingRulesConfiguration;
 import io.trino.gateway.ha.config.RulesExternalConfiguration;
 import io.trino.gateway.ha.persistence.JdbcConnectionManager;
-import io.trino.gateway.ha.persistence.RecordAndAnnotatedConstructorMapper;
 import io.trino.gateway.ha.router.BackendStateManager;
 import io.trino.gateway.ha.router.ForRouter;
 import io.trino.gateway.ha.router.GatewayBackendManager;
 import io.trino.gateway.ha.router.HaGatewayManager;
+import io.trino.gateway.ha.router.HaOAuth2RoutingStore;
 import io.trino.gateway.ha.router.HaQueryHistoryManager;
+import io.trino.gateway.ha.router.OAuth2RoutingStats;
+import io.trino.gateway.ha.router.OAuth2RoutingStore;
 import io.trino.gateway.ha.router.PathFilter;
 import io.trino.gateway.ha.router.QueryHistoryManager;
 import io.trino.gateway.ha.router.RoutingGroupSelector;
 import io.trino.gateway.ha.security.AuthorizationManager;
 import io.trino.gateway.ha.security.LbAuthorizer;
 import io.trino.gateway.ha.security.LbFormAuthManager;
+import io.trino.gateway.ha.security.LbJwtManager;
 import io.trino.gateway.ha.security.LbOAuthManager;
 import io.trino.gateway.ha.security.NoopAuthorizer;
 import io.trino.gateway.ha.security.NoopFilter;
@@ -62,13 +66,13 @@ import io.trino.gateway.ha.security.util.Authorizer;
 import io.trino.gateway.ha.security.util.ChainedAuthFilter;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.sqlobject.SqlObjectPlugin;
 
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static io.airlift.jaxrs.JaxrsBinder.jaxrsBinder;
 import static io.trino.gateway.ha.config.ClusterStatsMonitorType.INFO_API;
 import static io.trino.gateway.ha.config.ClusterStatsMonitorType.NOOP;
 import static java.util.Objects.requireNonNull;
+import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class HaGatewayProviderModule
         extends AbstractModule
@@ -82,6 +86,9 @@ public class HaGatewayProviderModule
         jaxrsBinder(binder()).bind(ResourceSecurityDynamicFeature.class);
         binder().bind(GatewayBackendManager.class).to(HaGatewayManager.class).in(Scopes.SINGLETON);
         binder().bind(QueryHistoryManager.class).to(HaQueryHistoryManager.class).in(Scopes.SINGLETON);
+        binder().bind(OAuth2RoutingStore.class).to(HaOAuth2RoutingStore.class).in(Scopes.SINGLETON);
+        binder().bind(OAuth2RoutingStats.class).in(Scopes.SINGLETON);
+        newExporter(binder()).export(OAuth2RoutingStats.class).withGeneratedName();
         binder().bind(BackendStateManager.class).in(Scopes.SINGLETON);
         binder().bind(JdbcConnectionManager.class).in(Scopes.SINGLETON);
         binder().bind(AuthorizationManager.class).in(Scopes.SINGLETON);
@@ -96,6 +103,12 @@ public class HaGatewayProviderModule
         }
         else {
             binder().bind(ContainerRequestFilter.class).to(NoopFilter.class).in(Scopes.SINGLETON);
+        }
+
+        if (configuration.getClientCertificateJwtAuthentication() != null) {
+            OptionalBinder.newOptionalBinder(binder(), HttpServer.ClientCertificate.class)
+                    .setBinding()
+                    .toInstance(HttpServer.ClientCertificate.REQUESTED);
         }
         binder().bind(ActiveClusterMonitor.class).in(Scopes.SINGLETON);
     }
@@ -113,12 +126,9 @@ public class HaGatewayProviderModule
 
     @Singleton
     @Provides
-    public static Jdbi createJdbi(DataStoreConfiguration config)
+    public static Jdbi getJdbi(JdbcConnectionManager connectionManager)
     {
-        Jdbi jdbi = Jdbi.create(config.getJdbcUrl(), config.getUser(), config.getPassword());
-        jdbi.installPlugin(new SqlObjectPlugin());
-        jdbi.registerRowMapper(new RecordAndAnnotatedConstructorMapper());
-        return jdbi;
+        return connectionManager.getJdbi();
     }
 
     @Provides
@@ -147,6 +157,17 @@ public class HaGatewayProviderModule
         AuthenticationConfiguration authenticationConfiguration = config.getAuthentication();
         if (authenticationConfiguration != null && authenticationConfiguration.getForm() != null) {
             return new LbFormAuthManager(authenticationConfiguration.getForm(), config.getPresetUsers(), config.getPagePermissions());
+        }
+        return null;
+    }
+
+    @Provides
+    @Singleton
+    public static LbJwtManager getJwtAuthentication(HaGatewayConfiguration config)
+    {
+        AuthenticationConfiguration authenticationConfiguration = config.getAuthentication();
+        if (authenticationConfiguration != null && authenticationConfiguration.getJwt() != null) {
+            return new LbJwtManager(authenticationConfiguration.getJwt(), config.getPagePermissions());
         }
         return null;
     }

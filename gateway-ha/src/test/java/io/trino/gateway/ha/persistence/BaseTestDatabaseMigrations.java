@@ -25,7 +25,6 @@ import org.testcontainers.containers.JdbcDatabaseContainer;
 
 import java.util.List;
 
-import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
@@ -100,6 +99,7 @@ public abstract class BaseTestDatabaseMigrations
     {
         verifyResultSetCount("SELECT name FROM gateway_backend", 0);
         verifyResultSetCount("SELECT query_id FROM query_history", 0);
+        verifyResultSetCount("SELECT pin_key FROM oauth2_routing", 0);
     }
 
     protected void verifyResultSetCount(String sql, int expectedCount)
@@ -113,12 +113,14 @@ public abstract class BaseTestDatabaseMigrations
     {
         String gatewayBackendTable = "DROP TABLE IF EXISTS gateway_backend";
         String queryHistoryTable = "DROP TABLE IF EXISTS query_history";
+        String oauth2RoutingTable = "DROP TABLE IF EXISTS oauth2_routing";
         String flywayHistoryTable = "DROP TABLE IF EXISTS flyway_schema_history";
         Handle jdbiHandle = jdbi.open();
-        String sql = format("SELECT 1 FROM information_schema.tables WHERE table_schema = '%s'", schema);
-        verifyResultSetCount(sql, 3);
+        String sql = "SELECT 1 FROM information_schema.tables WHERE table_schema = '%s'".formatted(schema);
+        verifyResultSetCount(sql, 4);
         jdbiHandle.execute(gatewayBackendTable);
         jdbiHandle.execute(queryHistoryTable);
+        jdbiHandle.execute(oauth2RoutingTable);
         jdbiHandle.execute(flywayHistoryTable);
         verifyResultSetCount(sql, 0);
         jdbiHandle.close();
@@ -133,6 +135,7 @@ public abstract class BaseTestDatabaseMigrations
                 container.getDriverClassName(),
                 true,
                 4,
-                true);
+                true,
+                null);
     }
 }

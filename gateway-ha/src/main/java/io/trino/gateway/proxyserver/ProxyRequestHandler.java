@@ -14,6 +14,7 @@
 package io.trino.gateway.proxyserver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.FluentFuture;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -30,6 +31,8 @@ import io.trino.gateway.ha.config.ProxyResponseConfiguration;
 import io.trino.gateway.ha.handler.schema.RoutingDestination;
 import io.trino.gateway.ha.router.GatewayCookie;
 import io.trino.gateway.ha.router.OAuth2GatewayCookie;
+import io.trino.gateway.ha.router.OAuth2RoutingStore;
+import io.trino.gateway.ha.router.OAuth2RoutingUtils;
 import io.trino.gateway.ha.router.QueryHistoryManager;
 import io.trino.gateway.ha.router.RoutingManager;
 import io.trino.gateway.ha.router.TrinoRequestUser;
@@ -51,6 +54,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.net.HttpHeaders.WWW_AUTHENTICATE;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.http.client.HeaderNames.VIA;
@@ -70,7 +74,7 @@ import static io.trino.gateway.ha.handler.ProxyUtils.SOURCE_HEADER;
 import static jakarta.ws.rs.core.MediaType.TEXT_PLAIN_TYPE;
 import static jakarta.ws.rs.core.Response.Status.BAD_GATEWAY;
 import static jakarta.ws.rs.core.Response.Status.OK;
-import static java.lang.String.format;
+import static jakarta.ws.rs.core.Response.Status.UNAUTHORIZED;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.list;
 import static java.util.Objects.requireNonNull;
@@ -89,7 +93,9 @@ public class ProxyRequestHandler
     private final HttpClient httpClient;
     private final RoutingManager routingManager;
     private final QueryHistoryManager queryHistoryManager;
+    private final OAuth2RoutingStore oauth2RoutingStore;
     private final boolean cookiesEnabled;
+    private final boolean oauth2RoutingEnabled;
     private final boolean forwardedHeadersEnabled;
     private final List<String> statementPaths;
     private final boolean includeClusterInfoInResponse;
@@ -100,12 +106,15 @@ public class ProxyRequestHandler
             @ForProxy HttpClient httpClient,
             RoutingManager routingManager,
             QueryHistoryManager queryHistoryManager,
+            OAuth2RoutingStore oauth2RoutingStore,
             HaGatewayConfiguration haGatewayConfiguration)
     {
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
         this.routingManager = requireNonNull(routingManager, "routingManager is null");
         this.queryHistoryManager = requireNonNull(queryHistoryManager, "queryHistoryManager is null");
+        this.oauth2RoutingStore = requireNonNull(oauth2RoutingStore, "oauth2RoutingStore is null");
         cookiesEnabled = GatewayCookieConfigurationPropertiesProvider.getInstance().isEnabled();
+        oauth2RoutingEnabled = haGatewayConfiguration.getRouting().isOauth2RoutingEnabled();
         asyncTimeout = haGatewayConfiguration.getRouting().getAsyncTimeout();
         forwardedHeadersEnabled = haGatewayConfiguration.getRouting().isForwardedHeadersEnabled();
         statementPaths = haGatewayConfiguration.getStatementPaths();
@@ -188,6 +197,10 @@ public class ProxyRequestHandler
 
         FluentFuture<ProxyResponse> future = executeHttp(request);
 
+        if (oauth2RoutingEnabled) {
+            future = future.transform(response -> recordOAuth2Challenge(remoteUri, response), executor);
+        }
+
         if (statementPaths.stream().anyMatch(request.getUri().getPath()::startsWith) && request.getMethod().equals(HttpMethod.POST)) {
             Optional<String> username = ((TrinoRequestUser) servletRequest.getAttribute(TRINO_REQUEST_USER)).getUser();
             future = future.transform(response -> recordBackendForQueryId(request, response, username, routingDestination), executor);
@@ -226,7 +239,7 @@ public class ProxyRequestHandler
 
     private static String getRemoteTarget(URI remoteUri)
     {
-        return format("%s://%s", remoteUri.getScheme(), remoteUri.getAuthority());
+        return "%s://%s".formatted(remoteUri.getScheme(), remoteUri.getAuthority());
     }
 
     private Response buildResponse(ProxyResponse response, ImmutableList<NewCookie> cookie)
@@ -254,8 +267,19 @@ public class ProxyRequestHandler
 
     private static Response handleProxyException(Request request, ProxyException e)
     {
-        log.warn(e, "Proxy request failed: %s %s", request.getMethod(), request.getUri());
+        log.warn(e, "Proxy request failed: %s %s", request.getMethod(), redactUriForLog(request.getUri()));
         throw badRequest(e.getMessage());
+    }
+
+    /**
+     * Redacts the OAuth2 handshake id ({@code authId}, {@code authIdHash}, {@code state}) from the
+     * URI. The backend URI has the {@code proxyTo} base path before Trino's own path, so
+     * {@link OAuth2RoutingUtils#redactForLog} matches the OAuth2 segments anywhere in the path.
+     */
+    @VisibleForTesting
+    static String redactUriForLog(URI uri)
+    {
+        return "%s://%s%s".formatted(uri.getScheme(), uri.getAuthority(), OAuth2RoutingUtils.redactForLog(uri.getPath(), uri.getQuery()));
     }
 
     private static WebApplicationException badRequest(String message)
@@ -273,11 +297,11 @@ public class ProxyRequestHandler
             Optional<String> username,
             RoutingDestination routingDestination)
     {
-        log.debug("For Request [%s] got Response [%s]", request.getUri(), response.body());
+        log.debug("For Request [%s] got Response [%s]", redactUriForLog(request.getUri()), response.body());
 
         QueryHistoryManager.QueryDetail queryDetail = getQueryDetailsFromRequest(request, username);
 
-        log.debug("Extracting proxy destination : [%s] for request : [%s]", queryDetail.getBackendUrl(), request.getUri());
+        log.debug("Extracting proxy destination : [%s] for request : [%s]", queryDetail.getBackendUrl(), redactUriForLog(request.getUri()));
 
         if (response.statusCode() == OK.getStatusCode()) {
             try {
@@ -298,6 +322,33 @@ public class ProxyRequestHandler
         queryDetail.setRoutingGroup(routingDestination.routingGroup());
         queryDetail.setExternalUrl(routingDestination.externalUrl());
         queryHistoryManager.submitQueryDetail(queryDetail);
+        return response;
+    }
+
+    /**
+     * Pins the Trino OAuth2 token-exchange handshake to this backend. The minting coordinator
+     * advertises the {@code authId} inside the {@code WWW-Authenticate} challenge of its {@code 401}
+     * ({@code x_token_server}); recording the derived pin key here lets every later request of the
+     * handshake (poll, initiate, and callback) be routed back here. See {@link OAuth2RoutingUtils}.
+     */
+    ProxyResponse recordOAuth2Challenge(URI remoteUri, ProxyResponse response)
+    {
+        // Inert unless the feature is enabled. performRequest only wires this transform in when
+        // enabled, but guarding here too keeps the write path self-contained so the dark-launch
+        // (disabled-by-default) guarantee holds regardless of how the method is reached.
+        if (!oauth2RoutingEnabled || response.statusCode() != UNAUTHORIZED.getStatusCode()) {
+            return response;
+        }
+        Optional<String> pinKey = response.headers().get(HeaderName.of(WWW_AUTHENTICATE)).stream()
+                .flatMap(header -> OAuth2RoutingUtils.pinKeyFromChallenge(header).stream())
+                .findFirst();
+        if (pinKey.isEmpty()) {
+            return response;
+        }
+        String backend = getRemoteTarget(remoteUri);
+        if (oauth2RoutingStore.setBackend(pinKey.get(), backend)) {
+            log.debug("Pinned an OAuth2 handshake to backend [%s]", backend);
+        }
         return response;
     }
 
@@ -324,7 +375,7 @@ public class ProxyRequestHandler
             }
         }
 
-        requestBuilder.addHeader(VIA, format("%s TrinoGateway", servletRequest.getProtocol()));
+        requestBuilder.addHeader(VIA, "%s TrinoGateway".formatted(servletRequest.getProtocol()));
 
         if (forwardedHeadersEnabled) {
             addForwardedHeaders(servletRequest, requestBuilder);

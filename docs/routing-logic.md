@@ -9,7 +9,9 @@ Trino cluster that dealt with the earlier requests.
 If it is a new request, the Trino Gateway refers to [Routing rules](routing-rules.md) 
 to decide which group of clusters, called a 'Routing Group,' should handle it. 
 It then picks a cluster from that Routing Group to handle the request using 
-either an adaptive or round-robin strategy.
+either an adaptive or round-robin strategy. Only clusters that are currently
+healthy are eligible — see [Cluster configuration and health status](operation.md#cluster-configuration-and-health-status)
+for details on how health status is determined.
 
 ![Request Routing Flow](assets/gateway-routing-flow.svg)
 
@@ -76,6 +78,53 @@ oauth2GatewayCookieConfiguration:
     - "/custom/logout"
   lifetime: "5m"
 ```
+
+### Routing based on OAuth2 token-exchange pinning (opt-in)
+
+Trino's OAuth2 token-exchange handshake for the CLI/driver spans two HTTP
+clients that only share an internal identifier (`authId`, and its hash):
+
+* the driver/CLI polls `GET /oauth2/token/{authId}` until the login completes
+* the browser is redirected to `GET /oauth2/token/initiate/{authIdHash}`, and
+  then returns from the identity provider to `GET /oauth2/callback` (which
+  carries the `authIdHash` inside its signed `state` parameter)
+
+Only the Trino coordinator that issued the original `401` challenge holds the
+in-memory state for that handshake. In a deployment with multiple
+coordinators, Trino Gateway's normal routing may send the poll loop, the
+initiate redirect, or the callback to a different coordinator than the one
+that started the handshake, causing the login to stall. The cookie-based
+routing above cannot solve this on its own: the CLI/driver poll loop does not
+carry cookies.
+
+When `routing.oauth2RoutingEnabled` is set to true, Trino Gateway records the
+`authId` advertised in the `401` challenge together with the
+coordinator that issued it, and pins every later request of that handshake —
+the poll loop, the initiate redirect, and the callback — back to the same
+coordinator:
+
+```yaml
+routing:
+  oauth2RoutingEnabled: true
+```
+
+Pins are stored in the gateway's database under a one-way hash of the
+handshake id, so the table does not expose the ids needed to poll for or
+complete another user's login. They are visible across every
+Trino Gateway instance, and are cleaned up automatically; see
+`dataStore.oauth2RoutingRetention` (default `20m`) to change how long a
+pin is kept.
+
+Trino Gateway drops the pin and asks the client to re-authenticate only if the
+pinned coordinator is deactivated or removed. Otherwise the request goes to the
+pinned coordinator whatever its health status, since no other coordinator can
+finish the handshake.
+
+Trino Gateway cannot redact these ids from the HTTP request log; see
+[Configure OAuth2 token-exchange routing](installation.md#configure-oauth2-token-exchange-routing)
+before enabling this feature.
+
+This feature is off by default.
 
 ## Routing URLs
 

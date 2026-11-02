@@ -26,8 +26,6 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
-import org.jdbi.v3.core.Handle;
-import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.oracle.OracleContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -46,7 +44,6 @@ import static com.google.common.net.HttpHeaders.CONTENT_ENCODING;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static com.google.common.util.concurrent.Uninterruptibles.sleepUninterruptibly;
 import static io.trino.gateway.ha.util.ConfigurationUtils.replaceEnvironmentVariables;
-import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,16 +68,6 @@ public class HaGatewayTestUtils
                 .setResponseCode(200));
     }
 
-    public static void seedRequiredData(String h2DbFilePath)
-    {
-        String jdbcUrl = "jdbc:h2:" + h2DbFilePath + ";NON_KEYWORDS=NAME,VALUE";
-        Jdbi jdbi = Jdbi.create(jdbcUrl, "sa", "sa");
-        try (Handle handle = jdbi.open()) {
-            handle.createUpdate(HaGatewayTestUtils.getResourceFileContent("gateway-ha-persistence-mysql.sql"))
-                    .execute();
-        }
-    }
-
     public static File buildGatewayConfig(PostgreSQLContainer postgreSqlContainer, int routerPort, String configFile)
             throws Exception
     {
@@ -102,7 +89,7 @@ public class HaGatewayTestUtils
                 .buildOrThrow();
         String configStr = replaceEnvironmentVariables(getResourceFileContent(configFile), vars);
 
-        File target = File.createTempFile("config-" + System.currentTimeMillis(), "config.yaml");
+        File target = Files.createTempFile("config-" + System.currentTimeMillis(), "config.yaml").toFile();
 
         try (BufferedWriter writer = Files.newBufferedWriter(target.toPath(), UTF_8)) {
             writer.append(configStr);
@@ -175,7 +162,7 @@ public class HaGatewayTestUtils
             throws IOException
     {
         Request getBackendStateRequest = new Request.Builder()
-                .url(format("http://localhost:%s/api/public/backends/%s/state", port, name))
+                .url("http://localhost:%s/api/public/backends/%s/state".formatted(port, name))
                 .get()
                 .build();
 

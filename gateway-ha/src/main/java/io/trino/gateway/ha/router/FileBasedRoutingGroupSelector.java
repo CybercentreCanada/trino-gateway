@@ -36,7 +36,6 @@ import static com.google.common.base.Suppliers.memoizeWithExpiration;
 import static io.trino.gateway.ha.handler.HttpUtils.TRINO_QUERY_PROPERTIES;
 import static io.trino.gateway.ha.handler.HttpUtils.TRINO_REQUEST_USER;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Collections.sort;
 
 public class FileBasedRoutingGroupSelector
         implements RoutingGroupSelector
@@ -74,7 +73,10 @@ public class FileBasedRoutingGroupSelector
 
         rules.get().forEach(rule -> {
             if (rule.evaluateCondition(data, state)) {
-                log.debug("%s evaluated to true on request: %s", rule, request);
+                log.debug(
+                        "%s evaluated to true on request: %s",
+                        rule,
+                        OAuth2RoutingUtils.redactForLog(request.getRequestURI(), request.getQueryString()));
                 rule.evaluateAction(result, data, state);
             }
         });
@@ -91,7 +93,7 @@ public class FileBasedRoutingGroupSelector
                 MVELRoutingRule routingRules = yamlReader.readValue(parser, MVELRoutingRule.class);
                 routingRulesList.add(routingRules);
             }
-            sort(routingRulesList);
+            routingRulesList.sort(null);
             return routingRulesList;
         }
         catch (IOException e) {
