@@ -48,7 +48,7 @@ steps:
     inputs:
       mavenPomFile: 'gateway-ha/pom.xml'
       goals: 'clean package'
-      options: '-DskipTests'
+      options: '-B --no-transfer-progress -DskipTests'
 
   - task: Bash@3
     displayName: Prepare Docker build context
