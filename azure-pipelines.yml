@@ -22,6 +22,7 @@ container:
   volumes:
     - "${{ variables.m2RepoNodePath }}:${{ variables.m2RepoContainerPath }}"
     - "/root/.m2/settings.xml:/root/.m2/settings.xml"
+    - "/var/run/docker.sock:/var/run/docker.sock"
 
 pool: cybertron-build-pool
 
@@ -47,7 +48,7 @@ steps:
     inputs:
       mavenPomFile: 'gateway-ha/pom.xml'
       goals: 'clean package'
-      options: '-DskipTests'
+      options: '-B --no-transfer-progress -DskipTests'
 
   - task: Bash@3
     displayName: Prepare Docker build context

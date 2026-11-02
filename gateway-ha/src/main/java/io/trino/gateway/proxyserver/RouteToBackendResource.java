@@ -119,13 +119,4 @@ public class RouteToBackendResource
     {
         return proxyRequestAuthenticator.authenticate(routingTargetResponse.modifiedRequest());
     }
-
-    @HEAD
-    public void headHandler(
-            @Context HttpServletRequest servletRequest,
-            @Suspended AsyncResponse asyncResponse)
-    {
-        RoutingTargetResponse result = routingTargetHandler.resolveRouting(servletRequest);
-        proxyRequestHandler.headRequest(result.modifiedRequest(), asyncResponse, result.routingDestination());
-    }
 }
